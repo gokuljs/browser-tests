@@ -3,7 +3,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import { cp, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -111,7 +111,7 @@ const parseArguments = () => {
 const prepareWorkspace = async (source: string, directory: string) => {
   const env = { ...process.env, GOWORK: "off" };
   if (!source) {
-    return env;
+    return { env, cwd: rootDir };
   }
 
   let checkout = path.resolve(source);
@@ -142,12 +142,39 @@ const prepareWorkspace = async (source: string, directory: string) => {
   const modulePath = await execute("go", ["list", "-m", "-f", "{{.Path}}"], {
     cwd: checkout, env, capture: true,
   });
-  if (modulePath !== "github.com/pion/webrtc/v4") {
-    throw new Error(`Expected github.com/pion/webrtc/v4 checkout, got ${modulePath}`);
+  if (!["github.com/pion/webrtc/v4", "github.com/pion/webrtc/v5"].includes(modulePath)) {
+    throw new Error(`Expected github.com/pion/webrtc/v4 or github.com/pion/webrtc/v5 checkout, got ${modulePath}`);
   }
   console.log(`Testing Pion WebRTC checkout: ${checkout}`);
-  await execute("go", ["work", "init", rootDir, checkout], { cwd: directory, env });
-  return { ...env, GOWORK: path.join(directory, "go.work") };
+  let cwd = rootDir;
+  if (modulePath.endsWith("/v5")) {
+    cwd = path.join(directory, "interop");
+    await cp(rootDir, cwd, {
+      recursive: true,
+      filter: (file) => {
+        const relative = path.relative(rootDir, file);
+        return !relative || relative === "internal" || relative.startsWith(`internal${path.sep}`)
+          || (path.dirname(relative) === "." && (relative.endsWith(".go") || ["go.mod", "go.sum"].includes(relative)));
+      },
+    });
+    const rewriteImports = async (directory: string): Promise<void> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          await rewriteImports(file);
+        } else if (entry.name.endsWith(".go")) {
+          const source = await readFile(file, "utf8");
+          await writeFile(file, source.replaceAll("github.com/pion/webrtc/v4", modulePath));
+        }
+      }
+    };
+    await rewriteImports(cwd);
+    // The workspace supplies v5, including branches with no published version.
+    await execute("go", ["mod", "edit", "-droprequire=github.com/pion/webrtc/v4"], { cwd, env });
+  }
+  cwd = await realpath(cwd);
+  await execute("go", ["work", "init", cwd, checkout], { cwd: directory, env });
+  return { cwd, env: { ...env, GOWORK: path.join(directory, "go.work") } };
 };
 
 const stop = async (child: ManagedChild) => {
@@ -236,9 +263,10 @@ try {
   }
   if (!process.env.TEST_SERVER_URL) {
     buildDir = await mkdtemp(path.join(tmpdir(), "pion-browser-tests-"));
-    const env = await prepareWorkspace(source, buildDir);
+    buildDir = await realpath(buildDir);
+    const { env, cwd } = await prepareWorkspace(source, buildDir);
     const executable = path.join(buildDir, process.platform === "win32" ? "server.exe" : "server");
-    await execute("go", ["build", "-o", executable, "."], { env });
+    await execute("go", ["build", "-buildvcs=false", "-o", executable, "."], { env, cwd });
 
     cancellation.signal.throwIfAborted();
     const id = randomUUID();

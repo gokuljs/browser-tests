@@ -143,10 +143,26 @@ require github.com/pion/webrtc/v4 v4.2.20
     await run(["--webrtc", "feature/source-test", "--reporter", "dot"], { EXPECTED_SOURCE: "updated feature" });
   });
 
+  it("builds v5 local changes and fetched refs without modifying either module", async () => {
+    await writeFile(path.join(upstream, "go.mod"), "module github.com/pion/webrtc/v5\n\ngo 1.24.0\n");
+    await setSource("v5 committed");
+    await commit();
+    await git("tag", "v5.0.0");
+    await setSource("v5 local changes");
+    const files = [path.join(fixture, "runner.go"), path.join(fixture, "go.mod"),
+      path.join(fixture, "go.sum"), path.join(upstream, "go.mod"), sourceFile()];
+    const before = await Promise.all(files.map(file => readFile(file, "utf8")));
+    const status = await git("status", "--porcelain");
+    await run(["--webrtc", upstream, "--reporter", "dot"], { EXPECTED_SOURCE: "v5 local changes" });
+    await run(["--webrtc", "v5.0.0", "--reporter", "dot"], { EXPECTED_SOURCE: "v5 committed" });
+    assert.deepEqual(await Promise.all(files.map(file => readFile(file, "utf8"))), before);
+    assert.equal(await git("status", "--porcelain"), status);
+  });
+
   it("rejects missing paths, wrong modules, invalid refs, and conflicting external-server mode", async () => {
     const cases: [string[], NodeJS.ProcessEnv, RegExp][] = [
       [["--webrtc", "./missing"], {}, /WebRTC checkout does not exist/],
-      [["--webrtc", "."], {}, /Expected github.com\/pion\/webrtc\/v4 checkout/],
+      [["--webrtc", "."], {}, /Expected github.com\/pion\/webrtc\/v4 or/],
       [["--webrtc", "no-such-ref"], {}, /exited:/],
       [["--webrtc"], {}, /--webrtc requires/],
       [["--webrtc", "main", "--webrtc", "main"], {}, /Specify --webrtc only once/],
