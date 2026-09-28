@@ -17,13 +17,14 @@ import (
 )
 
 type behavior struct {
-	setup   func(*webrtc.PeerConnection)
+	setup   func(*webrtc.PeerConnection) error
 	channel func(*webrtc.DataChannel)
 }
 
 var behaviors = map[string]behavior{ //nolint:gochecknoglobals
 	"none":             {},
 	"datachannel-echo": {setup: echo, channel: echoChannel},
+	"media-echo":       {setup: mediaEcho},
 }
 
 type peer struct {
@@ -113,7 +114,12 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 		session.mu.Unlock()
 	})
 	if selected.setup != nil {
-		selected.setup(pc)
+		if err = selected.setup(pc); err != nil {
+			_ = pc.Close()
+			http.Error(res, err.Error(), http.StatusBadRequest)
+
+			return
+		}
 	}
 	id := strconv.FormatUint(s.next.Add(1), 10)
 	s.mu.Lock()

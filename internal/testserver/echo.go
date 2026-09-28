@@ -9,7 +9,11 @@ import (
 	"github.com/pion/webrtc/v4"
 )
 
-func echo(pc *webrtc.PeerConnection) { pc.OnDataChannel(echoChannel) }
+func echo(pc *webrtc.PeerConnection) error {
+	pc.OnDataChannel(echoChannel)
+
+	return nil
+}
 
 func echoChannel(dc *webrtc.DataChannel) {
 	dc.OnMessage(func(message webrtc.DataChannelMessage) {
@@ -23,4 +27,47 @@ func echoChannel(dc *webrtc.DataChannel) {
 			log.Printf("echo channel %q (%s): %v", dc.Label(), dc.ReadyState(), err)
 		}
 	})
+}
+
+func mediaEcho(pc *webrtc.PeerConnection) error {
+	tracks := make(map[webrtc.RTPCodecType]*webrtc.TrackLocalStaticRTP)
+	for _, codec := range []webrtc.RTPCodecCapability{
+		{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+		{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000},
+	} {
+		track, err := webrtc.NewTrackLocalStaticRTP(codec, codec.MimeType, "echo")
+		if err != nil {
+			return err
+		}
+		sender, err := pc.AddTrack(track)
+		if err != nil {
+			return err
+		}
+		tracks[track.Kind()] = track
+		go func() {
+			for {
+				if _, _, readErr := sender.ReadRTCP(); readErr != nil {
+					return
+				}
+			}
+		}()
+	}
+	pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		local := tracks[remote.Kind()]
+		for {
+			packet, _, err := remote.ReadRTP()
+			if err != nil {
+				return
+			}
+			packet.Extension = false
+			packet.Extensions = nil
+			if err = local.WriteRTP(packet); err != nil {
+				log.Printf("media echo %s: %v", remote.Kind(), err)
+
+				return
+			}
+		}
+	})
+
+	return nil
 }

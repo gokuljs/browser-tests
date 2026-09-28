@@ -59,6 +59,9 @@ async function request<T>(path: string, method = "GET", body?: unknown): Promise
 
 type Peer = RTCPeerConnection | PionPeer;
 
+type TransportStats = RTCTransportStats & { tlsVersion?: string; dtlsRole?: string };
+const dtlsVersions: Record<string, string> = { FEFF: "1.0", FEFD: "1.2", FEFC: "1.3" };
+
 export class Interop {
   private browsers: RTCPeerConnection[] = [];
   private pions: PionPeer[] = [];
@@ -181,6 +184,21 @@ export class Interop {
     };
   }
 
+  async reportSecurity(testName: string): Promise<void> {
+    for (const [index, pc] of this.browsers.entries()) {
+      const stats = await pc.getStats();
+      const transports = Array.from(stats.values()).filter(stat => stat.type === "transport") as TransportStats[];
+      for (const transport of transports) {
+        const version = dtlsVersions[transport.tlsVersion?.toUpperCase() ?? ""] ?? transport.tlsVersion;
+        console.log(`[${testName}] browser ${index} transport ${transport.id}: ` +
+          `DTLS ${version || "unavailable"} (${transport.tlsVersion || "unavailable"}), ` +
+          `role=${transport.dtlsRole || "unavailable"}, state=${transport.dtlsState}, ` +
+          `cipher=${transport.dtlsCipher || "unavailable"}, SRTP=${transport.srtpCipher || "unavailable"}`);
+      }
+      if (!transports.length) console.log(`[${testName}] browser ${index}: DTLS/SRTP stats unavailable`);
+    }
+  }
+
   async close(): Promise<void> {
     this.abort.abort();
     this.browsers.forEach(pc => pc.close());
@@ -197,6 +215,7 @@ export const test = base.extend<{ interop: Interop }>({
       await use(interop);
     } finally {
       try {
+        await interop.reportSecurity(task.name);
         if (task.result?.state === "fail") console.error("Interop diagnostics", JSON.stringify(await interop.diagnostics(), null, 2));
       } finally {
         await interop.close();
