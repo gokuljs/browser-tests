@@ -38,6 +38,16 @@ runs:
       working-directory: ${{ github.action_path }}
       run: npm ci --no-audit --no-fund
 
+    - name: Configure virtual audio for Firefox
+      if: runner.os == 'Linux' && inputs.browser == 'firefox'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes pulseaudio
+        pulseaudio --start --exit-idle-time=-1
+        pactl load-module module-null-sink sink_name=pion_test_audio
+        pactl set-default-sink pion_test_audio
+
     - name: Enable Safari automation
       if: runner.os == 'macOS' && inputs.browser == 'safari'
       shell: bash
