@@ -72,6 +72,9 @@ const capabilitiesByBrowser = {
 >;
 
 export default defineConfig({
+  server: {
+    forwardConsole: { logLevels: ["log", "info", "warn", "error"] },
+  },
   test: {
     testTimeout: 60_000,
     include: ["test/**/*.test.ts"],
