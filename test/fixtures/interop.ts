@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 import { test as base, expect } from "vitest";
+import { interopFeatures } from "./interop-features";
 
 const timeoutMs = 10_000;
 const serverURL = import.meta.env.VITE_TEST_SERVER_URL ?? "http://127.0.0.1:38481";
@@ -25,7 +26,7 @@ export class PionPeer {
     return request(`/peers/${this.id}/${operation}`, "POST", body);
   }
 
-  createOffer(options: RTCOfferOptions = {}): Promise<RTCSessionDescriptionInit> {
+  createOffer(options: RTCOfferOptions & { dtlsRestart?: boolean } = {}): Promise<RTCSessionDescriptionInit> {
     return this.command("create-offer", options);
   }
   createAnswer(): Promise<RTCSessionDescriptionInit> { return this.command("create-answer"); }
@@ -63,6 +64,7 @@ type TransportStats = RTCTransportStats & { tlsVersion?: string; dtlsRole?: stri
 const dtlsVersions: Record<string, string> = { FEFF: "1.0", FEFD: "1.2", FEFC: "1.3" };
 
 export class Interop {
+  readonly features = interopFeatures(() => request("/features"));
   private browsers: RTCPeerConnection[] = [];
   private pions: PionPeer[] = [];
   private abort = new AbortController();

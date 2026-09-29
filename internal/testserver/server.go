@@ -53,6 +53,7 @@ func (s *Server) Close() {
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /features", func(res http.ResponseWriter, _ *http.Request) { reply(res, features()) })
 	mux.HandleFunc("POST /peers", s.create)
 	mux.HandleFunc("POST /peers/{id}/{operation}", s.operate)
 	mux.HandleFunc("GET /peers/{id}", s.snapshot)
@@ -184,11 +185,23 @@ func (s *Server) operate(res http.ResponseWriter, req *http.Request) {
 	var err error
 	switch req.PathValue("operation") {
 	case "create-offer":
-		var options webrtc.OfferOptions
+		var options struct {
+			webrtc.OfferOptions
+			DTLSRestart bool `json:"dtlsRestart"`
+		}
 		if !decode(res, req, &options) {
 			return
 		}
-		result, err = session.pc.CreateOffer(&options)
+		if options.DTLSRestart {
+			field := boolOption(&options.OfferOptions, "DTLSRestart")
+			if !field.IsValid() {
+				http.Error(res, features()["dtlsRestart"].Reason, http.StatusNotImplemented)
+
+				return
+			}
+			field.SetBool(true)
+		}
+		result, err = session.pc.CreateOffer(&options.OfferOptions)
 	case "create-answer":
 		result, err = session.pc.CreateAnswer(nil)
 	case "set-local-description", "set-remote-description":
