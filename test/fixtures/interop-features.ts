@@ -14,19 +14,27 @@ export function interopFeatures(loadPionFeatures: () => Promise<Record<string, F
     "browser.dtlsRestart": async () => {
       const offerer = new RTCPeerConnection();
       const answerer = new RTCPeerConnection();
+      const replacement = new RTCPeerConnection();
       try {
         offerer.createDataChannel("feature-probe");
-        const offer = await offerer.createOffer();
-        // Probe the answerer's RFC 8842 tls-id negotiation without a network handshake.
-        offer.sdp = offer.sdp!.replace(/^a=tls-id:.*\r?\n/gm, "")
-          .replace(/(^m=.*\r?\n)/gm, "$1a=tls-id:interop-feature-probe\r\n");
-        await answerer.setRemoteDescription(offer);
-        const answer = await answerer.createAnswer();
-        const supported = /^a=tls-id:\S+/m.test(answer.sdp ?? "");
-        return { supported, reason: supported ? undefined : "Browser does not negotiate SDP tls-id" };
+        await offerer.setLocalDescription(await offerer.createOffer());
+        await answerer.setRemoteDescription(offerer.localDescription!);
+        await answerer.setLocalDescription(await answerer.createAnswer());
+        await offerer.setRemoteDescription(answerer.localDescription!);
+
+        replacement.createDataChannel("feature-probe");
+        await replacement.setLocalDescription(await replacement.createOffer());
+        await answerer.setRemoteDescription(replacement.localDescription!);
+        await answerer.setLocalDescription(await answerer.createAnswer());
+        return { supported: true };
+      } catch (error) {
+        if (!(error instanceof DOMException) ||
+            !["NotSupportedError", "InvalidAccessError", "OperationError"].includes(error.name)) throw error;
+        return { supported: false, reason: `Browser rejected fingerprint renegotiation: ${error.message}` };
       } finally {
         offerer.close();
         answerer.close();
+        replacement.close();
       }
     },
   });
