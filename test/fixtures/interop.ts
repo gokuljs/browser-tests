@@ -188,6 +188,10 @@ export class Interop {
 
   async reportSecurity(testName: string): Promise<void> {
     for (const [index, pc] of this.browsers.entries()) {
+      if (pc.signalingState === "closed") {
+        console.log(`[${testName}] browser ${index}: peer closed`);
+        continue;
+      }
       const stats = await pc.getStats();
       const transports = Array.from(stats.values()).filter(stat => stat.type === "transport") as TransportStats[];
       for (const transport of transports) {

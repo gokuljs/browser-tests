@@ -64,15 +64,31 @@ test("renegotiates an ICE restart on the same peers", async ({ interop }) => {
   const browser = interop.browserPeer();
   const pion = await interop.pionPeer({ behavior: "datachannel-echo" });
   const channel = browser.createDataChannel("restart");
+  let opens = 0;
+  let closes = 0;
+  channel.addEventListener("open", () => opens++);
+  channel.addEventListener("close", () => closes++);
   await interop.negotiate(browser, pion);
   await interop.waitForOpen(channel);
-  const before = browser.localDescription!.sdp.match(/a=ice-ufrag:(.+)/)?.[1];
-  await interop.negotiate(browser, pion, { iceRestart: true });
-  expect(browser.localDescription!.sdp.match(/a=ice-ufrag:(.+)/)?.[1]).not.toBe(before);
-  expect((await pion.snapshot()).signalingState).toBe("stable");
-  const reply = interop.nextMessage(channel);
-  channel.send("after restart");
-  expect(await reply).toBe("after restart");
+  const sctp = browser.sctp;
+  const fingerprint = browser.localDescription!.sdp.match(/a=fingerprint:(.+)/)?.[1];
+  for (let generation = 0; generation < 3; generation++) {
+    if (generation > 0) {
+      const before = browser.localDescription!.sdp.match(/a=ice-ufrag:(.+)/)?.[1];
+      await interop.negotiate(browser, pion, { iceRestart: true });
+      expect(browser.localDescription!.sdp.match(/a=ice-ufrag:(.+)/)?.[1]).not.toBe(before);
+    }
+    expect(browser.sctp).toBe(sctp);
+    expect(browser.localDescription!.sdp.match(/a=fingerprint:(.+)/)?.[1]).toBe(fingerprint);
+    expect((await pion.snapshot()).signalingState).toBe("stable");
+    expect(channel.readyState).toBe("open");
+    const message = `ICE generation ${generation}: ${"data".repeat(4000)}`;
+    const reply = interop.nextMessage(channel);
+    channel.send(message);
+    expect(await reply).toBe(message);
+    expect(opens).toBe(1);
+    expect(closes).toBe(0);
+  }
 });
 
 test("exchanges ICE candidates separately from descriptions", async ({ interop }) => {
