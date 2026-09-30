@@ -7,6 +7,7 @@ import { mediaSource } from "../fixtures/media";
 import { negotiateFingerprintRestart } from "../fixtures/dtls-restart";
 
 test("DTLS fingerprint restart restores SRTP video echo on the same Pion peer", async ({ interop, skip }) => {
+  if (/Firefox\//.test(navigator.userAgent)) skip("Firefox DTLS restart: https://bugzilla.mozilla.org/show_bug.cgi?id=1320903");
   await interop.features.require({ skip }, "pion.dtlsRestart", "browser.dtlsRestart");
   const media = await mediaSource("video");
   try {

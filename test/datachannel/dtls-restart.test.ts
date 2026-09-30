@@ -57,6 +57,7 @@ async function closeChannel(interop: Interop, pion: PionPeer, channel: RTCDataCh
 }
 
 test("DTLS fingerprint restart preserves the original browser and Pion data channels", async ({ interop, skip }) => {
+  if (/Firefox\//.test(navigator.userAgent)) skip("Firefox DTLS restart: https://bugzilla.mozilla.org/show_bug.cgi?id=1320903");
   await interop.features.require({ skip }, "pion.dtlsRestart", "browser.dtlsRestart");
   const pion = await interop.pionPeer({ behavior: "datachannel-echo" });
   const browser = interop.browserPeer();
