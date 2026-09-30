@@ -149,3 +149,57 @@ test("DTLS fingerprint restart preserves the original browser and Pion data chan
     console.log(`DTLS fingerprint restart generation=${generation}: ${stats.length} original channels open; text/binary bursts, DCEP, close and SID reuse verified`);
   }
 });
+
+test("DTLS restart rotates supplied certificates and wraps while preserving a data channel", async ({ interop, skip }) => {
+  if (/Firefox\//.test(navigator.userAgent)) skip("Firefox DTLS restart: https://bugzilla.mozilla.org/show_bug.cgi?id=1320903");
+  await interop.features.require({ skip }, "pion.dtlsRestart", "browser.dtlsRestart");
+  const pion = await interop.pionPeer({ behavior: "datachannel-echo", certificateCount: 3 });
+  const expected = pion.certificateFingerprints.map(value => value.toUpperCase());
+  expect(new Set(expected).size).toBe(3);
+  const browser = interop.browserPeer();
+  const channel = browser.createDataChannel("certificate-rotation");
+  let opens = 0;
+  let closes = 0;
+  channel.addEventListener("open", () => opens++);
+  channel.addEventListener("close", () => closes++);
+  await interop.negotiate(browser, pion);
+  await interop.waitForOpen(channel);
+  const sctp = browser.sctp!;
+  const dtls = sctp.transport;
+  const fingerprint = (sdp: string) => {
+    const value = sdp.match(/^a=fingerprint:sha-256 (.+)/m)?.[1].trim();
+    expect(value).toBeTruthy();
+    return value!.toUpperCase();
+  };
+  const remoteFingerprint = async () => {
+    const certificates = dtls.getRemoteCertificates();
+    expect(certificates.length).toBeGreaterThan(0);
+    const digest = await crypto.subtle.digest("SHA-256", certificates[0]);
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join(":").toUpperCase();
+  };
+
+  for (let generation = 0; generation < 5; generation++) {
+    const selected = expected[generation % expected.length];
+    if (generation > 0) {
+      const discarded = await pion.createOffer({ dtlsRestart: true });
+      const offer = await pion.createOffer({ dtlsRestart: true });
+      expect(fingerprint(discarded.sdp!)).toBe(selected);
+      expect(fingerprint(offer.sdp!)).toBe(selected);
+      await pion.setLocalDescription(offer);
+      await browser.setRemoteDescription(await interop.localDescription(pion));
+      await browser.setLocalDescription(await browser.createAnswer());
+      await pion.setRemoteDescription(await interop.localDescription(browser));
+      await expect.poll(() => browser.connectionState, { timeout: 15_000 }).toBe("connected");
+      await expect.poll(async () => (await pion.snapshot()).connectionState, { timeout: 15_000 }).toBe("connected");
+    }
+    expect(fingerprint((await pion.snapshot()).localDescription!.sdp!)).toBe(selected);
+    await expect.poll(remoteFingerprint, { timeout: 15_000 }).toBe(selected);
+    expect(browser.sctp).toBe(sctp);
+    expect(browser.sctp!.transport).toBe(dtls);
+    expect(channel.readyState).toBe("open");
+    const reply = interop.nextMessage(channel);
+    channel.send(`certificate generation ${generation}`);
+    expect(await reply).toBe(`certificate generation ${generation}`);
+    expect({ opens, closes }).toEqual({ opens: 1, closes: 0 });
+  }
+});

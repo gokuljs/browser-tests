@@ -20,7 +20,11 @@ type Snapshot = {
 
 export class PionPeer {
   readonly id: string;
-  constructor(id: string) { this.id = id; }
+  readonly certificateFingerprints: string[];
+  constructor(id: string, certificateFingerprints: string[] = []) {
+    this.id = id;
+    this.certificateFingerprints = certificateFingerprints;
+  }
 
   private async command<T>(operation: string, body: unknown = {}): Promise<T> {
     return request(`/peers/${this.id}/${operation}`, "POST", body);
@@ -86,9 +90,9 @@ export class Interop {
     return pc;
   }
 
-  async pionPeer(options: { behavior?: string; configuration?: RTCConfiguration } = {}): Promise<PionPeer> {
-    const { id } = await request<{ id: string }>("/peers", "POST", options);
-    const peer = new PionPeer(id);
+  async pionPeer(options: { behavior?: string; configuration?: RTCConfiguration; certificateCount?: number } = {}): Promise<PionPeer> {
+    const { id, certificateFingerprints } = await request<{ id: string; certificateFingerprints?: string[] }>("/peers", "POST", options);
+    const peer = new PionPeer(id, certificateFingerprints);
     this.pions.push(peer);
     return peer;
   }

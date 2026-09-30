@@ -5,6 +5,9 @@
 package testserver
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -80,8 +83,9 @@ func reply(res http.ResponseWriter, value any) {
 
 func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	var body struct {
-		Behavior      string               `json:"behavior"`
-		Configuration webrtc.Configuration `json:"configuration"`
+		CertificateCount int                  `json:"certificateCount"`
+		Behavior         string               `json:"behavior"`
+		Configuration    webrtc.Configuration `json:"configuration"`
 	}
 	if !decode(res, req, &body) {
 		return
@@ -94,6 +98,34 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 		http.Error(res, "unknown behavior: "+body.Behavior, http.StatusBadRequest)
 
 		return
+	}
+	if body.CertificateCount < 0 || body.CertificateCount > 8 {
+		http.Error(res, "certificateCount must be between 0 and 8", http.StatusBadRequest)
+
+		return
+	}
+	fingerprints := make([]string, 0, body.CertificateCount)
+	for range body.CertificateCount {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			http.Error(res, err.Error(), http.StatusInternalServerError)
+
+			return
+		}
+		certificate, err := webrtc.GenerateCertificate(key)
+		if err != nil {
+			http.Error(res, err.Error(), http.StatusInternalServerError)
+
+			return
+		}
+		values, err := certificate.GetFingerprints()
+		if err != nil {
+			http.Error(res, err.Error(), http.StatusInternalServerError)
+
+			return
+		}
+		body.Configuration.Certificates = append(body.Configuration.Certificates, *certificate)
+		fingerprints = append(fingerprints, values[0].Value)
 	}
 	pc, err := webrtc.NewPeerConnection(body.Configuration)
 	if err != nil {
@@ -126,7 +158,11 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	s.peers[id] = session
 	s.mu.Unlock()
-	reply(res, map[string]string{"id": id})
+	response := map[string]any{"id": id}
+	if len(fingerprints) > 0 {
+		response["certificateFingerprints"] = fingerprints
+	}
+	reply(res, response)
 }
 
 func (s *Server) lookup(res http.ResponseWriter, req *http.Request) *peer {

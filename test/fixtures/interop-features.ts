@@ -15,18 +15,52 @@ export function interopFeatures(loadPionFeatures: () => Promise<Record<string, F
       const offerer = new RTCPeerConnection();
       const answerer = new RTCPeerConnection();
       const replacement = new RTCPeerConnection();
+      const waitFor = async (ready: () => boolean) => {
+        const deadline = Date.now() + 5_000;
+        while (!ready()) {
+          if (Date.now() >= deadline) return false;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        return true;
+      };
+      const negotiate = async (peer: RTCPeerConnection) => {
+        await peer.setLocalDescription(await peer.createOffer());
+        if (!await waitFor(() => peer.iceGatheringState === "complete")) {
+          throw new Error("Browser restart probe timed out gathering offer candidates");
+        }
+        await answerer.setRemoteDescription(peer.localDescription!);
+        await answerer.setLocalDescription(await answerer.createAnswer());
+        if (!await waitFor(() => answerer.iceGatheringState === "complete")) {
+          throw new Error("Browser restart probe timed out gathering answer candidates");
+        }
+        await peer.setRemoteDescription(answerer.localDescription!);
+      };
+      const echo = async (channel: RTCDataChannel, message: string) => {
+        if (!await waitFor(() => channel.readyState === "open")) return false;
+        let received = false;
+        channel.onmessage = event => { received = event.data === message; };
+        channel.send(message);
+        return waitFor(() => received);
+      };
       try {
-        offerer.createDataChannel("feature-probe");
-        await offerer.setLocalDescription(await offerer.createOffer());
-        await answerer.setRemoteDescription(offerer.localDescription!);
-        await answerer.setLocalDescription(await answerer.createAnswer());
-        await offerer.setRemoteDescription(answerer.localDescription!);
+        const options = { negotiated: true, id: 0 };
+        const original = offerer.createDataChannel("feature-probe", options);
+        const preserved = answerer.createDataChannel("feature-probe", options);
+        preserved.onmessage = event => preserved.send(event.data);
+        await negotiate(offerer);
+        if (!await echo(original, "before restart")) {
+          throw new Error("Browser restart probe could not establish its initial data channel");
+        }
 
-        replacement.createDataChannel("feature-probe");
-        await replacement.setLocalDescription(await replacement.createOffer());
-        await answerer.setRemoteDescription(replacement.localDescription!);
-        await answerer.setLocalDescription(await answerer.createAnswer());
-        return { supported: true };
+        const transport = answerer.sctp!.transport;
+        let restarting = false;
+        transport.addEventListener("statechange", () => {
+          if (transport.state === "new" || transport.state === "connecting") restarting = true;
+        });
+        replacement.createDataChannel("feature-probe", options);
+        await negotiate(replacement);
+        if (await waitFor(() => restarting)) return { supported: true };
+        return { supported: false, reason: "Browser accepted the new fingerprint without restarting its established DTLS transport" };
       } catch (error) {
         if (!(error instanceof DOMException) ||
             !["NotSupportedError", "InvalidAccessError", "OperationError"].includes(error.name)) throw error;
