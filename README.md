@@ -1,58 +1,91 @@
-<h1 align="center">
-  <br>
-  Pion Template
-  <br>
-</h1>
-<h4 align="center">Template for new Pion repositoies</h4>
-<p align="center">
-  <a href="https://pion.ly"><img src="https://img.shields.io/badge/pion-template-gray.svg?longCache=true&colorB=brightgreen" alt="Pion template"></a>
-  <a href="https://discord.gg/PngbdqpFbt"><img src="https://img.shields.io/badge/join-us%20on%20discord-gray.svg?longCache=true&logo=discord&colorB=brightblue" alt="join us on Discord"></a> <a href="https://bsky.app/profile/pion.ly"><img src="https://img.shields.io/badge/follow-us%20on%20bluesky-gray.svg?longCache=true&logo=bluesky&colorB=brightblue" alt="Follow us on Bluesky"></a>  <br>
-  <img alt="GitHub Workflow Status" src="https://img.shields.io/github/actions/workflow/status/pion/template/test.yaml">
-  <a href="https://pkg.go.dev/github.com/pion/template"><img src="https://pkg.go.dev/badge/github.com/pion/template.svg" alt="Go Reference"></a>
-  <a href="https://codecov.io/gh/pion/template"><img src="https://codecov.io/gh/pion/template/branch/master/graph/badge.svg" alt="Coverage Status"></a>
-  <a href="https://goreportcard.com/report/github.com/pion/template"><img src="https://goreportcard.com/badge/github.com/pion/template" alt="Go Report Card"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
-</p>
-<br>
+# Pion Browser Tests
 
-This repo is a template for starting new Pion-related Git repositories.
+Browser interoperability tests for [pion/webrtc](https://github.com/pion/webrtc).
+The suite connects real browser `RTCPeerConnection` instances to Pion peers and
+checks signaling, data channels, media transport, and connection restarts.
+Tests run in Chrome, Firefox, Edge, and Safari using Vitest and WebdriverIO.
 
-### Steps for creating a new repo
+## How it works
 
-1. Search and replace any occurrence of `template` in this repo.
-2. Add the repo to the [pion/.goassets sync workflow](https://github.com/pion/.goassets/blob/master/.github/workflows/assets-sync.yml#L15)
-3. Update README
-4. Update the repository details:
-    - Tags: at least "go", "golang", "pion", ...
-    - Description: _same as in README_
-    - URL: https://pion.ly/
-    - Disable features "Environments", "Packages"
-5. Please make sure the repo has consistent GitHub settings with the other Pion repos:
-    - Disable features "Wiki", "Projects", "Discussions", "Sponsorships"
-    - Enable feature "Preserve this repository"
-    - Only allow rebase merging. Disable squash and merge commits.
-    - Enable option "Always suggest updating pull request branches"
-    - Enable option "Automatically delete head branches"
-    - Make sure the [master branch is protected](https://github.com/pion/template/settings/branch_protection_rules):
-        - Enable "Require a pull request before merging"
-            - Enable "Require approvals"
-            - Set "Require number of approvals before merging" to 1
-        - Enable "Require status checks to pass before merging"
-        - Enable "Require linear history"
+The [runner](scripts/run-browser-tests.ts) builds and starts a Go test server,
+waits for it to become ready, and launches the selected browser. Tests control
+Pion peers through the server's HTTP API: creating offers and answers,
+exchanging ICE candidates, opening channels, and reading connection stats.
 
-### Roadmap
-The library is used as a part of our WebRTC implementation. Please refer to that [roadmap](https://github.com/pion/webrtc/issues/9) to track our major milestones.
+## Run locally
 
-### Community
-Pion has an active community on the [Discord](https://discord.gg/PngbdqpFbt).
+Install Node.js 24 or later, Go with the toolchain specified in [go.mod](go.mod),
+and the browser you want to test. Browser automation also needs a matching
+WebDriver. You can provide explicit paths when automatic discovery is unsuitable:
 
-Follow the [Pion Bluesky](https://bsky.app/profile/pion.ly) or [Pion Twitter](https://twitter.com/_pion) for project updates and important WebRTC news.
+| Browser | Browser executable | WebDriver executable |
+| --- | --- | --- |
+| Chrome / Chromium | `CHROME_BIN` | `CHROMEDRIVER_PATH` |
+| Firefox | `FIREFOX_BIN` | `GECKODRIVER_PATH` |
+| Edge | `EDGE_BIN` | `EDGEDRIVER_PATH` |
+| Safari | System Safari on macOS | System `safaridriver` |
 
-We are always looking to support **your projects**. Please reach out if you have something to build!
-If you need commercial support or don't want to use public methods you can contact us at [team@pion.ly](mailto:team@pion.ly)
+Safari requires Remote Automation to be enabled. The CI action enables it with
+`sudo safaridriver --enable`.
 
-### Contributing
-Check out the [contributing wiki](https://github.com/pion/webrtc/wiki/Contributing) to join the group of amazing people making this project possible
+```sh
+npm ci
+npm run test:chrome
+```
 
-### License
-MIT License - see [LICENSE](LICENSE) for full text
+Use `test:firefox`, `test:edge`, or `test:safari` to select another browser.
+`npm test` defaults to Chrome. Browsers run headlessly by default except Safari;
+
+With Nix, `nix develop` provides Go and Node.js. On Linux it also provides
+
+Arguments after `--` are forwarded to Vitest, apart from `--webrtc`:
+
+```sh
+npm run test:chrome -- test/ice/mdns.test.ts
+npm run test:firefox -- test/datachannel/echo.test.ts -t 'echoes binary'
+```
+
+### Select the Pion version
+
+By default, the server uses the dependency versions in this repository's
+`go.mod`. Use `--webrtc` to test a local checkout, including uncommitted changes,
+or a branch, tag, or commit from `pion/webrtc`:
+
+```sh
+npm run test:chrome -- --webrtc /path/to/webrtc
+npm run test:firefox -- --webrtc main
+```
+
+Both WebRTC v4 and v5 checkouts are supported. The runner uses a temporary Go
+workspace.
+
+`PION_WEBRTC_SOURCE` is the environment-variable equivalent of `--webrtc`.
+Set `PION_WEBRTC_REPOSITORY` to fetch remote revisions from a different Git
+repository, such as a fork.
+
+## Development
+
+Browser tests live in [test/](test/). Shared fixtures in
+[test/fixtures/](test/fixtures/) manage browser and Pion peers, signaling,
+media sources, and feature detection. The Go peer-control API and echo behaviors
+live in [internal/testserver/](internal/testserver/).
+
+```sh
+npm run lint
+npm run typecheck
+npm run test:runner
+go test ./...
+```
+
+`test:runner` checks process lifecycle and WebRTC source selection without
+launching a browser. Run the relevant browser tests separately when changing
+interop behavior. Test output includes available DTLS and SRTP transport details;
+failed tests also log peer descriptions, state history, and stats.
+
+## Community and license
+
+Join the [Pion Discord](https://discord.gg/PngbdqpFbt) for discussion and see the
+[contributing guide](https://github.com/pion/webrtc/wiki/Contributing) to get
+involved.
+
+MIT licensed. See [LICENSE](LICENSE).
