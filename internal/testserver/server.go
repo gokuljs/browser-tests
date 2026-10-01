@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/pion/logging"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -127,7 +128,10 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 		body.Configuration.Certificates = append(body.Configuration.Certificates, *certificate)
 		fingerprints = append(fingerprints, values[0].Value)
 	}
-	pc, err := webrtc.NewPeerConnection(body.Configuration)
+	loggerFactory := logging.NewDefaultLoggerFactory()
+	loggerFactory.DefaultLogLevel = logging.LogLevelDebug
+	settings := webrtc.SettingEngine{LoggerFactory: loggerFactory}
+	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(body.Configuration)
 	if err != nil {
 		http.Error(res, err.Error(), http.StatusBadRequest)
 
