@@ -32,11 +32,12 @@ var behaviors = map[string]behavior{ //nolint:gochecknoglobals
 }
 
 type peer struct {
-	behavior   behavior
-	pc         *webrtc.PeerConnection
-	mu         sync.Mutex
-	candidates []webrtc.ICECandidateInit
-	states     []string
+	behavior     behavior
+	pc           *webrtc.PeerConnection
+	mu           sync.Mutex
+	candidates   []webrtc.ICECandidateInit
+	states       []string
+	observations *rtpRecorder
 }
 
 type Server struct {
@@ -62,6 +63,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /peers/{id}/{operation}", s.operate)
 	mux.HandleFunc("GET /peers/{id}", s.snapshot)
 	mux.HandleFunc("GET /peers/{id}/stats", s.stats)
+	mux.HandleFunc("GET /peers/{id}/rtp", s.rtp)
 	mux.HandleFunc("DELETE /peers/{id}", s.remove)
 }
 
@@ -87,8 +89,14 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 		CertificateCount int                  `json:"certificateCount"`
 		Behavior         string               `json:"behavior"`
 		Configuration    webrtc.Configuration `json:"configuration"`
+		OpusRED          bool                 `json:"opusRED"`
 	}
 	if !decode(res, req, &body) {
+		return
+	}
+	if body.OpusRED && !opusREDSupport().Supported {
+		http.Error(res, opusREDSupport().Reason, http.StatusNotImplemented)
+
 		return
 	}
 	if body.Behavior == "" {
@@ -131,13 +139,21 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	loggerFactory := logging.NewDefaultLoggerFactory()
 	loggerFactory.DefaultLogLevel = logging.LogLevelDebug
 	settings := webrtc.SettingEngine{LoggerFactory: loggerFactory}
-	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(body.Configuration)
+	var pc *webrtc.PeerConnection
+	var err error
+	var observation *rtpRecorder
+	if body.OpusRED {
+		observation = &rtpRecorder{}
+		pc, err = newOpusREDPeer(settings, body.Configuration, observation)
+	} else {
+		pc, err = webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(body.Configuration)
+	}
 	if err != nil {
 		http.Error(res, err.Error(), http.StatusBadRequest)
 
 		return
 	}
-	session := &peer{behavior: selected, pc: pc, candidates: []webrtc.ICECandidateInit{}, states: []string{}}
+	session := &peer{behavior: selected, pc: pc, observations: observation, candidates: []webrtc.ICECandidateInit{}, states: []string{}}
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c != nil {
 			session.mu.Lock()
@@ -150,8 +166,12 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 		session.states = append(session.states, state.String())
 		session.mu.Unlock()
 	})
-	if selected.setup != nil {
-		if err = selected.setup(pc); err != nil {
+	setup := selected.setup
+	if observation != nil && body.Behavior == "media-echo" {
+		setup = func(pc *webrtc.PeerConnection) error { return mediaEchoObserved(pc, observation) }
+	}
+	if setup != nil {
+		if err = setup(pc); err != nil {
 			_ = pc.Close()
 			http.Error(res, err.Error(), http.StatusBadRequest)
 
@@ -214,6 +234,19 @@ func (s *Server) stats(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	reply(res, session.pc.GetStats())
+}
+
+func (s *Server) rtp(res http.ResponseWriter, req *http.Request) {
+	session := s.lookup(res, req)
+	if session == nil {
+		return
+	}
+	if session.observations == nil {
+		http.Error(res, "RTP observations require an opusRED peer", http.StatusBadRequest)
+
+		return
+	}
+	reply(res, session.observations.snapshot())
 }
 
 func (s *Server) operate(res http.ResponseWriter, req *http.Request) {
