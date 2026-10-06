@@ -26,3 +26,21 @@ export async function mediaSource(kind: "audio" | "video") {
     stream.getTracks().forEach(track => track.stop());
   } };
 }
+
+// A known non-silent source independent of fake microphone settings.
+export async function oscillatorSource() {
+  const context = new AudioContext({ sampleRate: 48000 });
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  const destination = context.createMediaStreamDestination();
+  oscillator.frequency.value = 440;
+  gain.gain.value = 0.2;
+  oscillator.connect(gain).connect(destination);
+  oscillator.start();
+  await context.resume();
+  return { stream: destination.stream, close: async () => {
+    oscillator.stop();
+    destination.stream.getTracks().forEach(track => track.stop());
+    await context.close();
+  } };
+}

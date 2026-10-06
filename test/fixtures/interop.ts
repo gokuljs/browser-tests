@@ -18,12 +18,32 @@ type Snapshot = {
   states: string[];
 };
 
+export type ObservedRTP = {
+  ssrc: number;
+  sequenceNumber: number;
+  timestamp: number;
+  payloadType: number;
+  payload: string;
+  padding?: boolean;
+  paddingSize?: number;
+};
+
+export type RTPObservations = {
+  inbound: ObservedRTP[];
+  outbound: ObservedRTP[];
+  application: ObservedRTP[];
+  errors: string[];
+  truncated: boolean;
+};
+
 export class PionPeer {
   readonly id: string;
   readonly certificateFingerprints: string[];
-  constructor(id: string, certificateFingerprints: string[] = []) {
+  readonly opusRED: boolean;
+  constructor(id: string, certificateFingerprints: string[] = [], opusRED = false) {
     this.id = id;
     this.certificateFingerprints = certificateFingerprints;
+    this.opusRED = opusRED;
   }
 
   private async command<T>(operation: string, body: unknown = {}): Promise<T> {
@@ -48,6 +68,7 @@ export class PionPeer {
   }
   snapshot(): Promise<Snapshot> { return request(`/peers/${this.id}`); }
   stats(): Promise<Record<string, unknown>> { return request(`/peers/${this.id}/stats`); }
+  rtp(): Promise<RTPObservations> { return request(`/peers/${this.id}/rtp`); }
   close(): Promise<void> { return request(`/peers/${this.id}`, "DELETE"); }
 }
 
@@ -90,9 +111,9 @@ export class Interop {
     return pc;
   }
 
-  async pionPeer(options: { behavior?: string; configuration?: RTCConfiguration; certificateCount?: number } = {}): Promise<PionPeer> {
+  async pionPeer(options: { behavior?: string; configuration?: RTCConfiguration; certificateCount?: number; opusRED?: boolean } = {}): Promise<PionPeer> {
     const { id, certificateFingerprints } = await request<{ id: string; certificateFingerprints?: string[] }>("/peers", "POST", options);
-    const peer = new PionPeer(id, certificateFingerprints);
+    const peer = new PionPeer(id, certificateFingerprints, options.opusRED);
     this.pions.push(peer);
     return peer;
   }
@@ -186,6 +207,7 @@ export class Interop {
         id: peer.id,
         snapshot: await peer.snapshot().catch(String),
         stats: await peer.stats().catch(String),
+        ...(peer.opusRED ? { rtp: await peer.rtp().catch(String) } : {}),
       }))),
     };
   }
