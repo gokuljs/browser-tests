@@ -18,6 +18,17 @@ func newOpusREDPeer(
 ) (*webrtc.PeerConnection, error) {
 	media := &webrtc.MediaEngine{}
 	pt := options.payloadTypes()
+	fmtp := "minptime=10;useinbandfec=1"
+	if options.DisableFEC {
+		fmtp = "minptime=10;useinbandfec=0"
+		if err := media.RegisterCodec(webrtc.RTPCodecParameters{
+			RTPCodecCapability: webrtc.RTPCodecCapability{
+				MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: fmtp,
+			}, PayloadType: webrtc.PayloadType(pt.Opus),
+		}, webrtc.RTPCodecTypeAudio); err != nil {
+			return nil, err
+		}
+	}
 	if options.PayloadTypes == nil || pt == (redPayloadTypes{Opus: 111, RED: 63}) {
 		if err := media.RegisterDefaultCodecs(); err != nil {
 			return nil, err
@@ -28,7 +39,7 @@ func newOpusREDPeer(
 		if err := media.RegisterCodec(webrtc.RTPCodecParameters{
 			RTPCodecCapability: webrtc.RTPCodecCapability{
 				MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-				SDPFmtpLine: "minptime=10;useinbandfec=1",
+				SDPFmtpLine: fmtp,
 			}, PayloadType: webrtc.PayloadType(pt.Opus),
 		}, webrtc.RTPCodecTypeAudio); err != nil {
 			return nil, err

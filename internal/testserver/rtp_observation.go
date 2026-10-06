@@ -33,13 +33,20 @@ type rtpSnapshot struct {
 	DroppedOutbound []observedRTP `json:"droppedOutbound"`
 	Errors          []string      `json:"errors"`
 	Truncated       bool          `json:"truncated"`
+	SourceDone      bool          `json:"sourceDone"`
+	Drained         bool          `json:"drained"`
 }
 
 // RED peers retain a bounded prefix; ordinary peers have no recorder.
 type rtpRecorder struct {
-	mu           sync.Mutex
-	observation  rtpSnapshot
-	startWithRED bool
+	mu                sync.Mutex
+	observation       rtpSnapshot
+	startWithRED      bool
+	observationLimit  int
+	source            redSourceConfig
+	outboundDrop      map[int]bool
+	outboundOrdinal   int
+	startupSuppressed bool
 }
 
 func observeRTP(header *rtp.Header, payload []byte) observedRTP {
@@ -53,7 +60,15 @@ func observeRTP(header *rtp.Header, payload []byte) observedRTP {
 func (r *rtpRecorder) record(target *[]observedRTP, header *rtp.Header, payload []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(*target) >= maxRTPObservations {
+	r.recordLocked(target, header, payload)
+}
+
+func (r *rtpRecorder) recordLocked(target *[]observedRTP, header *rtp.Header, payload []byte) {
+	limit := r.observationLimit
+	if limit == 0 {
+		limit = maxRTPObservations
+	}
+	if len(*target) >= limit {
 		r.observation.Truncated = true
 
 		return
@@ -61,15 +76,24 @@ func (r *rtpRecorder) record(target *[]observedRTP, header *rtp.Header, payload 
 	*target = append(*target, observeRTP(header, payload))
 }
 
-// Suppress one plain packet after encoding, retaining its copy in encoder history.
-func (r *rtpRecorder) suppressInitialOpus(header *rtp.Header, payload []byte, opusPayloadType uint8) bool {
+// Drops happen after encoding, retaining the missing audio in encoder history.
+func (r *rtpRecorder) dropOutbound(header *rtp.Header, payload []byte, opusPayloadType uint8) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.startWithRED || len(r.observation.DroppedOutbound) != 0 ||
-		header.PayloadType != opusPayloadType || header.Padding || len(payload) == 0 {
+	if len(payload) == 0 {
 		return false
 	}
-	r.observation.DroppedOutbound = append(r.observation.DroppedOutbound, observeRTP(header, payload))
+	ordinal := r.outboundOrdinal
+	r.outboundOrdinal++
+	drop := r.outboundDrop[ordinal]
+	if r.startWithRED && !r.startupSuppressed && !header.Padding && header.PayloadType == opusPayloadType {
+		r.startupSuppressed = true
+		drop = true
+	}
+	if !drop {
+		return false
+	}
+	r.recordLocked(&r.observation.DroppedOutbound, header, payload)
 
 	return true
 }
@@ -96,6 +120,7 @@ func (r *rtpRecorder) snapshot() rtpSnapshot {
 		Source:          append([]observedRTP{}, r.observation.Source...),
 		DroppedOutbound: append([]observedRTP{}, r.observation.DroppedOutbound...),
 		Errors:          append([]string{}, r.observation.Errors...), Truncated: r.observation.Truncated,
+		SourceDone: r.observation.SourceDone, Drained: r.observation.Drained,
 	}
 }
 
@@ -114,7 +139,7 @@ func (o *rtpObserver) BindLocalStream(info *interceptor.StreamInfo, writer inter
 	}
 
 	return interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attributes interceptor.Attributes) (int, error) {
-		if o.recorder.suppressInitialOpus(header, payload, uint8(info.PayloadType)) {
+		if o.recorder.dropOutbound(header, payload, uint8(info.PayloadType)) {
 			return header.MarshalSize() + len(payload), nil
 		}
 		o.recorder.record(&o.recorder.observation.Outbound, header, payload)
@@ -129,8 +154,17 @@ func (o *rtpObserver) BindRemoteStream(info *interceptor.StreamInfo, reader inte
 	if !strings.EqualFold(info.MimeType, "audio/opus") {
 		return reader
 	}
+	pendingDrain := false
 
 	return interceptor.RTPReaderFunc(func(buffer []byte, attributes interceptor.Attributes) (int, interceptor.Attributes, error) {
+		if pendingDrain {
+			// RED requested another raw packet, so it consumed the sentinel and
+			// emitted all pending application output without a decoding error.
+			o.recorder.mu.Lock()
+			o.recorder.observation.Drained = true
+			o.recorder.mu.Unlock()
+			pendingDrain = false
+		}
 		n, attributes, err := reader.Read(buffer, attributes)
 		if err != nil {
 			o.recorder.recordError(err)
@@ -142,6 +176,7 @@ func (o *rtpObserver) BindRemoteStream(info *interceptor.StreamInfo, reader inte
 			o.recorder.recordError(parseErr)
 		} else {
 			o.recorder.record(&o.recorder.observation.Inbound, &packet.Header, packet.Payload)
+			pendingDrain = o.recorder.isDrainSentinel(&packet, uint8(info.PayloadType), info.SSRC)
 		}
 
 		return n, attributes, nil
