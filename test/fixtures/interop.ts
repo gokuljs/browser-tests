@@ -36,7 +36,14 @@ export type RTPObservations = {
   droppedOutbound: ObservedRTP[];
   errors: string[];
   truncated: boolean;
+  sourceDone: boolean;
+  drained: boolean;
 };
+
+export type REDSourceOptions = {
+  packets?: number; trailers?: number; sequenceStart?: number; timestampStart?: number; intervalMs?: number;
+};
+export type REDImpairmentOptions = { outboundDrop?: number[] };
 
 export type AudioCodecOrder = "red-first" | "opus-first" | "opus-only";
 
@@ -116,7 +123,8 @@ export class Interop {
   }
 
   async pionPeer(options: { behavior?: string; configuration?: RTCConfiguration; certificateCount?: number; opusRED?: boolean; startWithRED?: boolean;
-    opusREDPayloadTypes?: { opus: number; red: number }; audioCodecOrder?: AudioCodecOrder } = {}): Promise<PionPeer> {
+    opusREDPayloadTypes?: { opus: number; red: number }; audioCodecOrder?: AudioCodecOrder;
+    redSource?: REDSourceOptions; redImpairment?: REDImpairmentOptions; observationLimit?: number } = {}): Promise<PionPeer> {
     const { id, certificateFingerprints } = await request<{ id: string; certificateFingerprints?: string[] }>("/peers", "POST", options);
     const peer = new PionPeer(id, certificateFingerprints, options.opusRED);
     this.pions.push(peer);

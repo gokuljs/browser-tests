@@ -89,20 +89,31 @@ func reply(res http.ResponseWriter, value any) {
 
 func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	var body struct {
-		CertificateCount int                  `json:"certificateCount"`
-		Behavior         string               `json:"behavior"`
-		Configuration    webrtc.Configuration `json:"configuration"`
-		OpusRED          bool                 `json:"opusRED"`
-		StartWithRED     bool                 `json:"startWithRED"`
-		REDPayloadTypes  *redPayloadTypes     `json:"opusREDPayloadTypes"`
-		AudioCodecOrder  string               `json:"audioCodecOrder"`
+		CertificateCount int                   `json:"certificateCount"`
+		Behavior         string                `json:"behavior"`
+		Configuration    webrtc.Configuration  `json:"configuration"`
+		OpusRED          bool                  `json:"opusRED"`
+		StartWithRED     bool                  `json:"startWithRED"`
+		REDPayloadTypes  *redPayloadTypes      `json:"opusREDPayloadTypes"`
+		AudioCodecOrder  string                `json:"audioCodecOrder"`
+		REDSource        *redSourceOptions     `json:"redSource"`
+		REDImpairment    *redImpairmentOptions `json:"redImpairment"`
+		ObservationLimit int                   `json:"observationLimit"`
 	}
 	if !decode(res, req, &body) {
 		return
 	}
-	redOptions := redPeerOptions{PayloadTypes: body.REDPayloadTypes, CodecOrder: body.AudioCodecOrder}
-	if !body.OpusRED && (body.REDPayloadTypes != nil || body.AudioCodecOrder != "") {
+	redOptions := redPeerOptions{PayloadTypes: body.REDPayloadTypes, CodecOrder: body.AudioCodecOrder,
+		DisableFEC: body.REDSource != nil || body.REDImpairment != nil}
+	if !body.OpusRED && (body.REDPayloadTypes != nil || body.AudioCodecOrder != "" ||
+		body.REDSource != nil || body.REDImpairment != nil || body.ObservationLimit != 0) {
 		http.Error(res, "RED audio options require opusRED", http.StatusBadRequest)
+
+		return
+	}
+	if (body.REDSource != nil || body.REDImpairment != nil) &&
+		body.Behavior != "red-audio-send" && body.Behavior != "red-audio-receive" {
+		http.Error(res, "controlled RED source requires an audio send/receive behavior", http.StatusBadRequest)
 
 		return
 	}
@@ -172,7 +183,12 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	var err error
 	var observation *rtpRecorder
 	if body.OpusRED {
-		observation = &rtpRecorder{startWithRED: body.StartWithRED}
+		observation, err = newRTPRecorder(body.StartWithRED, body.ObservationLimit, body.REDSource, body.REDImpairment)
+		if err != nil {
+			http.Error(res, err.Error(), http.StatusBadRequest)
+
+			return
+		}
 		pc, err = newOpusREDPeer(settings, body.Configuration, observation, redOptions)
 	} else {
 		pc, err = webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(body.Configuration)

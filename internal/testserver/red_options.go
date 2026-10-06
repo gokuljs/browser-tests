@@ -18,6 +18,7 @@ type redPayloadTypes struct {
 type redPeerOptions struct {
 	PayloadTypes *redPayloadTypes
 	CodecOrder   string
+	DisableFEC   bool
 }
 
 func (o redPeerOptions) payloadTypes() redPayloadTypes {

@@ -72,6 +72,10 @@ func redAudioSend(pc *webrtc.PeerConnection, observation *rtpRecorder) (func(web
 	if err != nil {
 		return nil, err
 	}
+	configuration := observation.source
+	if configuration.packets == 0 {
+		configuration, _ = sourceConfig(nil)
+	}
 	track, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, "tone", "red-audio",
 	)
@@ -118,18 +122,30 @@ func redAudioSend(pc *webrtc.PeerConnection, observation *rtpRecorder) (func(web
 
 			return
 		}
-		ticker := time.NewTicker(20 * time.Millisecond)
-		defer ticker.Stop()
-		for index, payload := range packets {
-			select {
-			case <-closed:
-				return
-			case <-ticker.C:
+		var tick <-chan time.Time
+		if configuration.intervalMS > 0 {
+			ticker := time.NewTicker(time.Duration(configuration.intervalMS) * time.Millisecond)
+			defer ticker.Stop()
+			tick = ticker.C
+		}
+		ssrc := uint32(parameters.Encodings[0].SSRC)
+		for index := range configuration.packets + configuration.trailers {
+			if tick == nil {
+				select {
+				case <-closed:
+					return
+				default:
+				}
+			} else {
+				select {
+				case <-closed:
+					return
+				case <-tick:
+				}
 			}
-			packet := &rtp.Packet{Header: rtp.Header{
-				Version: 2, PayloadType: opusPayloadType, SSRC: uint32(parameters.Encodings[0].SSRC),
-				SequenceNumber: uint16(1000 + index), Timestamp: 48000 + uint32(index)*960,
-			}, Payload: payload}
+			packet := &rtp.Packet{
+				Header: configuration.header(index, opusPayloadType, ssrc), Payload: packets[index%len(packets)],
+			}
 			observation.record(&observation.observation.Source, &packet.Header, packet.Payload)
 			if writeErr := track.WriteRTP(packet); writeErr != nil {
 				observation.recordError(writeErr)
@@ -137,6 +153,19 @@ func redAudioSend(pc *webrtc.PeerConnection, observation *rtpRecorder) (func(web
 				return
 			}
 		}
+		if configuration.controlled {
+			// No audio copies are carried by this final padding-only packet. It is
+			// deliberately outside loss controls and absent from the source ledger.
+			sentinel := configuration.sentinel(opusPayloadType, ssrc)
+			if writeErr := track.WriteRTP(&sentinel); writeErr != nil {
+				observation.recordError(writeErr)
+
+				return
+			}
+		}
+		observation.mu.Lock()
+		observation.observation.SourceDone = true
+		observation.mu.Unlock()
 	}()
 
 	return func(state webrtc.PeerConnectionState) {
