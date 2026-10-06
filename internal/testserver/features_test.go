@@ -70,6 +70,21 @@ func TestFeatureDiscoveryAndOptionalOffer(t *testing.T) {
 		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 		require.Contains(t, response.Body.String(), "a=rtpmap:63 red/48000/2")
 		require.Contains(t, response.Body.String(), "a=fmtp:63 111/111")
+		for _, profile := range []struct{ name, direction string }{
+			{"red-audio-send", "sendonly"}, {"red-audio-receive", "recvonly"},
+		} {
+			response = call("POST", "/peers", `{"opusRED":true,"behavior":"`+profile.name+`"}`)
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			require.NoError(t, json.Unmarshal(response.Body.Bytes(), &created))
+			profilePath := "/peers/" + created["id"]
+			response = call("GET", profilePath+"/rtp", "")
+			require.Equal(t, http.StatusOK, response.Code)
+			require.Contains(t, response.Body.String(), `"source":[]`)
+			require.Contains(t, response.Body.String(), `"droppedOutbound":[]`)
+			response = call("POST", profilePath+"/create-offer", `{}`)
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			require.Contains(t, response.Body.String(), "a="+profile.direction)
+		}
 	} else {
 		require.Equal(t, http.StatusNotImplemented, response.Code)
 		require.NotEmpty(t, capabilities["opusRED"].Reason)

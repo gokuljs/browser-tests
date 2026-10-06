@@ -26,9 +26,11 @@ type behavior struct {
 }
 
 var behaviors = map[string]behavior{ //nolint:gochecknoglobals
-	"none":             {},
-	"datachannel-echo": {setup: echo, channel: echoChannel},
-	"media-echo":       {setup: mediaEcho},
+	"none":              {},
+	"datachannel-echo":  {setup: echo, channel: echoChannel},
+	"media-echo":        {setup: mediaEcho},
+	"red-audio-send":    {},
+	"red-audio-receive": {},
 }
 
 type peer struct {
@@ -90,8 +92,19 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 		Behavior         string               `json:"behavior"`
 		Configuration    webrtc.Configuration `json:"configuration"`
 		OpusRED          bool                 `json:"opusRED"`
+		StartWithRED     bool                 `json:"startWithRED"`
 	}
 	if !decode(res, req, &body) {
+		return
+	}
+	if (body.Behavior == "red-audio-send" || body.Behavior == "red-audio-receive") && !body.OpusRED {
+		http.Error(res, "RED audio behaviors require opusRED", http.StatusBadRequest)
+
+		return
+	}
+	if body.StartWithRED && (!body.OpusRED || body.Behavior != "red-audio-send") {
+		http.Error(res, "startWithRED requires red-audio-send with opusRED", http.StatusBadRequest)
+
 		return
 	}
 	if body.OpusRED && !opusREDSupport().Supported {
@@ -143,7 +156,7 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	var err error
 	var observation *rtpRecorder
 	if body.OpusRED {
-		observation = &rtpRecorder{}
+		observation = &rtpRecorder{startWithRED: body.StartWithRED}
 		pc, err = newOpusREDPeer(settings, body.Configuration, observation)
 	} else {
 		pc, err = webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(body.Configuration)
@@ -161,14 +174,20 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 			session.mu.Unlock()
 		}
 	})
-	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		session.mu.Lock()
-		session.states = append(session.states, state.String())
-		session.mu.Unlock()
-	})
 	setup := selected.setup
+	var mediaStateChange func(webrtc.PeerConnectionState)
 	if observation != nil && body.Behavior == "media-echo" {
 		setup = func(pc *webrtc.PeerConnection) error { return mediaEchoObserved(pc, observation) }
+	}
+	if body.Behavior == "red-audio-receive" {
+		setup = func(pc *webrtc.PeerConnection) error { return redAudioReceive(pc, observation) }
+	}
+	if body.Behavior == "red-audio-send" {
+		setup = func(pc *webrtc.PeerConnection) error {
+			mediaStateChange, err = redAudioSend(pc, observation)
+
+			return err
+		}
 	}
 	if setup != nil {
 		if err = setup(pc); err != nil {
@@ -178,6 +197,14 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
+	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		session.mu.Lock()
+		session.states = append(session.states, state.String())
+		session.mu.Unlock()
+		if mediaStateChange != nil {
+			mediaStateChange(state)
+		}
+	})
 	id := strconv.FormatUint(s.next.Add(1), 10)
 	s.mu.Lock()
 	s.peers[id] = session

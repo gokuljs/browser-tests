@@ -38,6 +38,10 @@ func TestPeerIsolationAndLifecycle(t *testing.T) {
 	}
 	call("POST", "/peers", `{"behavior":"missing"}`, 400)
 	call("POST", "/peers", `{`, 400)
+	call("POST", "/peers", `{"behavior":"red-audio-send"}`, 400)
+	call("POST", "/peers", `{"behavior":"red-audio-receive"}`, 400)
+	call("POST", "/peers", `{"startWithRED":true}`, 400)
+	call("POST", "/peers", `{"opusRED":true,"behavior":"red-audio-receive","startWithRED":true}`, 400)
 	first, second := create(), create()
 	require.NotEqual(t, first, second, "peer IDs reused")
 	call("POST", first+"/set-remote-description", `{"type":"offer","sdp":"invalid"}`, 400)

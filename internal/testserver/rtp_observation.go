@@ -26,17 +26,28 @@ type observedRTP struct {
 }
 
 type rtpSnapshot struct {
-	Inbound     []observedRTP `json:"inbound"`
-	Outbound    []observedRTP `json:"outbound"`
-	Application []observedRTP `json:"application"`
-	Errors      []string      `json:"errors"`
-	Truncated   bool          `json:"truncated"`
+	Inbound         []observedRTP `json:"inbound"`
+	Outbound        []observedRTP `json:"outbound"`
+	Application     []observedRTP `json:"application"`
+	Source          []observedRTP `json:"source"`
+	DroppedOutbound []observedRTP `json:"droppedOutbound"`
+	Errors          []string      `json:"errors"`
+	Truncated       bool          `json:"truncated"`
 }
 
 // RED peers retain a bounded prefix; ordinary peers have no recorder.
 type rtpRecorder struct {
-	mu          sync.Mutex
-	observation rtpSnapshot
+	mu           sync.Mutex
+	observation  rtpSnapshot
+	startWithRED bool
+}
+
+func observeRTP(header *rtp.Header, payload []byte) observedRTP {
+	return observedRTP{
+		SSRC: header.SSRC, SequenceNumber: header.SequenceNumber, Timestamp: header.Timestamp,
+		PayloadType: header.PayloadType, Payload: append([]byte{}, payload...),
+		Padding: header.Padding, PaddingSize: header.PaddingSize,
+	}
 }
 
 func (r *rtpRecorder) record(target *[]observedRTP, header *rtp.Header, payload []byte) {
@@ -47,11 +58,20 @@ func (r *rtpRecorder) record(target *[]observedRTP, header *rtp.Header, payload 
 
 		return
 	}
-	*target = append(*target, observedRTP{
-		SSRC: header.SSRC, SequenceNumber: header.SequenceNumber, Timestamp: header.Timestamp,
-		PayloadType: header.PayloadType, Payload: append([]byte{}, payload...),
-		Padding: header.Padding, PaddingSize: header.PaddingSize,
-	})
+	*target = append(*target, observeRTP(header, payload))
+}
+
+// Suppress one plain packet after encoding, retaining its copy in encoder history.
+func (r *rtpRecorder) suppressInitialOpus(header *rtp.Header, payload []byte, opusPayloadType uint8) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.startWithRED || len(r.observation.DroppedOutbound) != 0 ||
+		header.PayloadType != opusPayloadType || header.Padding || len(payload) == 0 {
+		return false
+	}
+	r.observation.DroppedOutbound = append(r.observation.DroppedOutbound, observeRTP(header, payload))
+
+	return true
 }
 
 func (r *rtpRecorder) recordError(err error) {
@@ -70,10 +90,12 @@ func (r *rtpRecorder) snapshot() rtpSnapshot {
 	defer r.mu.Unlock()
 
 	return rtpSnapshot{
-		Inbound:     append([]observedRTP{}, r.observation.Inbound...),
-		Outbound:    append([]observedRTP{}, r.observation.Outbound...),
-		Application: append([]observedRTP{}, r.observation.Application...),
-		Errors:      append([]string{}, r.observation.Errors...), Truncated: r.observation.Truncated,
+		Inbound:         append([]observedRTP{}, r.observation.Inbound...),
+		Outbound:        append([]observedRTP{}, r.observation.Outbound...),
+		Application:     append([]observedRTP{}, r.observation.Application...),
+		Source:          append([]observedRTP{}, r.observation.Source...),
+		DroppedOutbound: append([]observedRTP{}, r.observation.DroppedOutbound...),
+		Errors:          append([]string{}, r.observation.Errors...), Truncated: r.observation.Truncated,
 	}
 }
 
@@ -92,6 +114,9 @@ func (o *rtpObserver) BindLocalStream(info *interceptor.StreamInfo, writer inter
 	}
 
 	return interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attributes interceptor.Attributes) (int, error) {
+		if o.recorder.suppressInitialOpus(header, payload, uint8(info.PayloadType)) {
+			return header.MarshalSize() + len(payload), nil
+		}
 		o.recorder.record(&o.recorder.observation.Outbound, header, payload)
 		n, err := writer.Write(header, payload, attributes)
 		o.recorder.recordError(err)

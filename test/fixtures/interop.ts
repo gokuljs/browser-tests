@@ -32,6 +32,8 @@ export type RTPObservations = {
   inbound: ObservedRTP[];
   outbound: ObservedRTP[];
   application: ObservedRTP[];
+  source: ObservedRTP[];
+  droppedOutbound: ObservedRTP[];
   errors: string[];
   truncated: boolean;
 };
@@ -111,7 +113,7 @@ export class Interop {
     return pc;
   }
 
-  async pionPeer(options: { behavior?: string; configuration?: RTCConfiguration; certificateCount?: number; opusRED?: boolean } = {}): Promise<PionPeer> {
+  async pionPeer(options: { behavior?: string; configuration?: RTCConfiguration; certificateCount?: number; opusRED?: boolean; startWithRED?: boolean } = {}): Promise<PionPeer> {
     const { id, certificateFingerprints } = await request<{ id: string; certificateFingerprints?: string[] }>("/peers", "POST", options);
     const peer = new PionPeer(id, certificateFingerprints, options.opusRED);
     this.pions.push(peer);
