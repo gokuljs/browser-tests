@@ -51,6 +51,11 @@ export function expectedDeliveries(source: ObservedRTP[], carriers: ObservedRTP[
     if (carrier.padding && carrier.payload === "") {
       const position = highest === undefined ? carrier.sequenceNumber : highest +
         ((carrier.sequenceNumber - (highest & 0xffff) + 0x8000 & 0xffff) - 0x8000);
+      if (highest !== undefined && highest - position >= 64) continue;
+      if (highest !== undefined && position - highest >= 64) {
+        delivered.clear();
+        padding.clear();
+      }
       padding.add(position);
       highest = Math.max(highest ?? position, position);
       continue;

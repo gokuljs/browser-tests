@@ -118,6 +118,12 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 
 		return
 	}
+	if body.REDImpairment != nil && ((body.REDImpairment.InboundOrder != nil && body.Behavior != "red-audio-receive") ||
+		(len(body.REDImpairment.OutboundDrop) > 0 && body.Behavior != "red-audio-send")) {
+		http.Error(res, "RED loss and replay controls require their respective send/receive profile", http.StatusBadRequest)
+
+		return
+	}
 	if body.OpusRED {
 		if err := redOptions.validate(); err != nil {
 			http.Error(res, err.Error(), http.StatusBadRequest)

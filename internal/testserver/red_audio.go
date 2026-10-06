@@ -144,7 +144,8 @@ func redAudioSend(pc *webrtc.PeerConnection, observation *rtpRecorder) (func(web
 				}
 			}
 			packet := &rtp.Packet{
-				Header: configuration.header(index, opusPayloadType, ssrc), Payload: packets[index%len(packets)],
+				Header:  configuration.header(index, opusPayloadType, ssrc),
+				Payload: configuration.payload(index, packets[index%len(packets)]),
 			}
 			observation.record(&observation.observation.Source, &packet.Header, packet.Payload)
 			if writeErr := track.WriteRTP(packet); writeErr != nil {

@@ -27,6 +27,8 @@ type observedRTP struct {
 
 type rtpSnapshot struct {
 	Inbound         []observedRTP `json:"inbound"`
+	InboundOriginal []observedRTP `json:"inboundOriginal"`
+	InboundActions  []rtpAction   `json:"inboundActions"`
 	Outbound        []observedRTP `json:"outbound"`
 	Application     []observedRTP `json:"application"`
 	Source          []observedRTP `json:"source"`
@@ -47,6 +49,7 @@ type rtpRecorder struct {
 	outboundDrop      map[int]bool
 	outboundOrdinal   int
 	startupSuppressed bool
+	inboundOrder      []int
 }
 
 func observeRTP(header *rtp.Header, payload []byte) observedRTP {
@@ -115,6 +118,8 @@ func (r *rtpRecorder) snapshot() rtpSnapshot {
 
 	return rtpSnapshot{
 		Inbound:         append([]observedRTP{}, r.observation.Inbound...),
+		InboundOriginal: append([]observedRTP{}, r.observation.InboundOriginal...),
+		InboundActions:  append([]rtpAction{}, r.observation.InboundActions...),
 		Outbound:        append([]observedRTP{}, r.observation.Outbound...),
 		Application:     append([]observedRTP{}, r.observation.Application...),
 		Source:          append([]observedRTP{}, r.observation.Source...),
@@ -153,6 +158,9 @@ func (o *rtpObserver) BindLocalStream(info *interceptor.StreamInfo, writer inter
 func (o *rtpObserver) BindRemoteStream(info *interceptor.StreamInfo, reader interceptor.RTPReader) interceptor.RTPReader {
 	if !strings.EqualFold(info.MimeType, "audio/opus") {
 		return reader
+	}
+	if o.recorder.inboundOrder != nil {
+		reader = newREDOrderedReader(o.recorder, info, reader)
 	}
 	pendingDrain := false
 
