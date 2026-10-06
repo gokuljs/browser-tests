@@ -7,6 +7,7 @@ package testserver
 
 import (
 	"github.com/pion/interceptor"
+	"github.com/pion/interceptor/pkg/red"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -51,7 +52,11 @@ func newOpusREDPeer(
 	}
 	// Observe RED on the wire side of the encoder/decoder, alongside reports and stats.
 	registry.Add(observation)
-	if err := webrtc.ConfigureOpusRED(webrtc.PayloadType(pt.Opus), webrtc.PayloadType(pt.RED), media, registry); err != nil {
+	var senderOptions []red.SenderOption
+	if options.MaxPacketSize != 0 {
+		senderOptions = append(senderOptions, red.SenderMaxPacketSize(options.MaxPacketSize))
+	}
+	if err := webrtc.ConfigureOpusRED(webrtc.PayloadType(pt.Opus), webrtc.PayloadType(pt.RED), media, registry, senderOptions...); err != nil {
 		return nil, err
 	}
 

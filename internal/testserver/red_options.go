@@ -16,9 +16,10 @@ type redPayloadTypes struct {
 }
 
 type redPeerOptions struct {
-	PayloadTypes *redPayloadTypes
-	CodecOrder   string
-	DisableFEC   bool
+	PayloadTypes  *redPayloadTypes
+	CodecOrder    string
+	DisableFEC    bool
+	MaxPacketSize int
 }
 
 func (o redPeerOptions) payloadTypes() redPayloadTypes {
@@ -30,6 +31,9 @@ func (o redPeerOptions) payloadTypes() redPayloadTypes {
 }
 
 func (o redPeerOptions) validate() error {
+	if o.MaxPacketSize < 0 || o.MaxPacketSize > 65535 {
+		return errors.New("RED packet size budget must be between 1 and 65535")
+	}
 	pt := o.payloadTypes()
 	if pt.Opus == 0 || pt.RED == 0 || pt.Opus > 127 || pt.RED > 127 || pt.Opus == pt.RED {
 		return errors.New("RED requires distinct payload types between 1 and 127")

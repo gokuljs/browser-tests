@@ -7,10 +7,11 @@ import { audioCodecs, content, decodeRED, identity, wireLedger, type Codecs } fr
 
 export async function recoveryScenario(interop: Interop, options: {
   source?: REDSourceOptions; sender?: REDImpairmentOptions; receiver?: REDImpairmentOptions;
+  maxPacketSize?: number;
 } = {}) {
   const redSource = { packets: 256, trailers: 2, intervalMs: 2, ...options.source };
   const common = { opusRED: true, redSource, observationLimit: 512, audioCodecOrder: "red-first" as const };
-  const sender = await interop.pionPeer({ ...common, behavior: "red-audio-send", redImpairment: options.sender });
+  const sender = await interop.pionPeer({ ...common, behavior: "red-audio-send", redImpairment: options.sender, redMaxPacketSize: options.maxPacketSize });
   const receiver = await interop.pionPeer({ ...common, behavior: "red-audio-receive", redImpairment: options.receiver });
   await interop.negotiate(sender, receiver);
   const description = (await sender.snapshot()).localDescription;
