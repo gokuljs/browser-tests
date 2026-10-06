@@ -99,14 +99,15 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 		REDSource        *redSourceOptions     `json:"redSource"`
 		REDImpairment    *redImpairmentOptions `json:"redImpairment"`
 		ObservationLimit int                   `json:"observationLimit"`
+		REDMaxPacketSize int                   `json:"redMaxPacketSize"`
 	}
 	if !decode(res, req, &body) {
 		return
 	}
 	redOptions := redPeerOptions{PayloadTypes: body.REDPayloadTypes, CodecOrder: body.AudioCodecOrder,
-		DisableFEC: body.REDSource != nil || body.REDImpairment != nil}
+		DisableFEC: body.REDSource != nil || body.REDImpairment != nil, MaxPacketSize: body.REDMaxPacketSize}
 	if !body.OpusRED && (body.REDPayloadTypes != nil || body.AudioCodecOrder != "" ||
-		body.REDSource != nil || body.REDImpairment != nil || body.ObservationLimit != 0) {
+		body.REDSource != nil || body.REDImpairment != nil || body.ObservationLimit != 0 || body.REDMaxPacketSize != 0) {
 		http.Error(res, "RED audio options require opusRED", http.StatusBadRequest)
 
 		return
