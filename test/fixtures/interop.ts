@@ -38,12 +38,15 @@ export type RTPObservations = {
   truncated: boolean;
   sourceDone: boolean;
   drained: boolean;
+  inboundOriginal: ObservedRTP[];
+  inboundActions: { kind: "hold" | "release" | "duplicate" | "drop"; ordinal: number }[];
 };
 
 export type REDSourceOptions = {
   packets?: number; trailers?: number; sequenceStart?: number; timestampStart?: number; intervalMs?: number;
+  packetOverrides?: { index: number; sequenceNumber?: number; timestamp?: number; payload?: string; opusFrames?: number }[];
 };
-export type REDImpairmentOptions = { outboundDrop?: number[] };
+export type REDImpairmentOptions = { outboundDrop?: number[]; inboundOrder?: number[] };
 
 export type AudioCodecOrder = "red-first" | "opus-first" | "opus-only";
 

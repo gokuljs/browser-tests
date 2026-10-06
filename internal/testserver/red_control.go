@@ -13,24 +13,35 @@ import (
 const maxRTPObservationLimit = 4096
 
 type redSourceOptions struct {
-	Packets        int     `json:"packets"`
-	Trailers       int     `json:"trailers"`
-	SequenceStart  *uint16 `json:"sequenceStart"`
-	TimestampStart *uint32 `json:"timestampStart"`
-	IntervalMS     *int    `json:"intervalMs"`
+	Packets         int                 `json:"packets"`
+	Trailers        int                 `json:"trailers"`
+	SequenceStart   *uint16             `json:"sequenceStart"`
+	TimestampStart  *uint32             `json:"timestampStart"`
+	IntervalMS      *int                `json:"intervalMs"`
+	PacketOverrides []redPacketOverride `json:"packetOverrides"`
+}
+
+type redPacketOverride struct {
+	Index          int     `json:"index"`
+	SequenceNumber *uint16 `json:"sequenceNumber"`
+	Timestamp      *uint32 `json:"timestamp"`
+	Payload        *[]byte `json:"payload"`
+	OpusFrames     int     `json:"opusFrames"`
 }
 
 type redImpairmentOptions struct {
 	OutboundDrop []int `json:"outboundDrop"`
+	InboundOrder []int `json:"inboundOrder"`
 }
 
 type redSourceConfig struct {
-	packets        int
-	trailers       int
-	sequenceStart  uint16
-	timestampStart uint32
-	intervalMS     int
-	controlled     bool
+	packets         int
+	trailers        int
+	sequenceStart   uint16
+	timestampStart  uint32
+	intervalMS      int
+	controlled      bool
+	packetOverrides map[int]redPacketOverride
 }
 
 var errInvalidREDControl = errors.New("invalid RED test controls") //nolint:gochecknoglobals
@@ -62,6 +73,41 @@ func sourceConfig(options *redSourceOptions) (redSourceConfig, error) {
 		return redSourceConfig{}, fmt.Errorf("%w: require 1..4095 total packets, 0..2 trailers, intervalMs 0..1000",
 			errInvalidREDControl)
 	}
+	configuration.packetOverrides = make(map[int]redPacketOverride)
+	for _, override := range options.PacketOverrides {
+		_, duplicate := configuration.packetOverrides[override.Index]
+		if override.Index < 0 || override.Index >= configuration.packets+configuration.trailers || duplicate ||
+			(override.Payload != nil && len(*override.Payload) > 4096) || override.OpusFrames < 0 || override.OpusFrames > 3 ||
+			(override.Payload != nil && override.OpusFrames != 0) {
+			return redSourceConfig{}, fmt.Errorf("%w: invalid packet override at index %d", errInvalidREDControl, override.Index)
+		}
+		if override.SequenceNumber != nil {
+			value := *override.SequenceNumber
+			override.SequenceNumber = &value
+		}
+		if override.Timestamp != nil {
+			value := *override.Timestamp
+			override.Timestamp = &value
+		}
+		if override.Payload != nil {
+			value := append([]byte{}, (*override.Payload)...)
+			override.Payload = &value
+		}
+		configuration.packetOverrides[override.Index] = override
+	}
+	identities := make(map[redSourceIdentity]bool)
+	for index := range configuration.packets + configuration.trailers {
+		header := configuration.header(index, 0, 0)
+		identity := redSourceIdentity{header.SequenceNumber, header.Timestamp}
+		if identities[identity] {
+			return redSourceConfig{}, fmt.Errorf("%w: packet override repeats source identity at index %d", errInvalidREDControl, index)
+		}
+		identities[identity] = true
+	}
+	sentinel := configuration.sentinel(0, 0)
+	if identities[redSourceIdentity{sentinel.SequenceNumber, sentinel.Timestamp}] {
+		return redSourceConfig{}, fmt.Errorf("%w: completion sentinel overlaps a source identity", errInvalidREDControl)
+	}
 
 	return configuration, nil
 }
@@ -91,21 +137,66 @@ func newRTPRecorder(
 			}
 			recorder.outboundDrop[ordinal] = true
 		}
+		if impairment.InboundOrder != nil {
+			if source == nil || len(impairment.InboundOrder) >= maxRTPObservationLimit {
+				return nil, fmt.Errorf("%w: inboundOrder requires an explicit bounded redSource", errInvalidREDControl)
+			}
+			for _, ordinal := range impairment.InboundOrder {
+				if ordinal < 0 || ordinal >= configuration.packets+configuration.trailers {
+					return nil, fmt.Errorf("%w: inboundOrder contains invalid source ordinal %d", errInvalidREDControl, ordinal)
+				}
+			}
+			recorder.inboundOrder = append([]int{}, impairment.InboundOrder...)
+		}
 	}
 
 	return recorder, nil
 }
 
 func (source redSourceConfig) header(index int, payloadType uint8, ssrc uint32) rtp.Header {
-	return rtp.Header{
+	header := rtp.Header{
 		Version: 2, PayloadType: payloadType, SSRC: ssrc,
 		SequenceNumber: uint16((int(source.sequenceStart) + index) & 0xffff), //nolint:gosec // Deliberate RTP wrap.
 		Timestamp:      source.timestampStart + uint32(index)*960,            //nolint:gosec // Packet count is bounded.
 	}
+	if override, ok := source.packetOverrides[index]; ok {
+		if override.SequenceNumber != nil {
+			header.SequenceNumber = *override.SequenceNumber
+		}
+		if override.Timestamp != nil {
+			header.Timestamp = *override.Timestamp
+		}
+	}
+
+	return header
+}
+
+func (source redSourceConfig) payload(index int, fallback []byte) []byte {
+	if override, ok := source.packetOverrides[index]; ok {
+		if override.Payload != nil {
+			return *override.Payload
+		}
+		if override.OpusFrames > 1 {
+			// Opus code 3 with VBR/padding bits clear carries equal-sized frames.
+			// Each fixture packet is one 20 ms frame, so 2/3 frames are 40/60 ms.
+			frame := fallback[1:]
+			payload := make([]byte, 2+len(frame)*override.OpusFrames)
+			payload[0], payload[1] = fallback[0]|3, byte(override.OpusFrames) //nolint:gosec // Count is validated 1..3.
+			for frameIndex := range override.OpusFrames {
+				copy(payload[2+frameIndex*len(frame):], frame)
+			}
+
+			return payload
+		}
+	}
+
+	return fallback
 }
 
 func (source redSourceConfig) sentinel(payloadType uint8, ssrc uint32) rtp.Packet {
-	header := source.header(source.packets+source.trailers, payloadType, ssrc)
+	header := source.header(source.packets+source.trailers-1, payloadType, ssrc)
+	header.SequenceNumber++
+	header.Timestamp += 960
 	header.Padding, header.Marker, header.PaddingSize = true, true, 1
 
 	return rtp.Packet{Header: header}
