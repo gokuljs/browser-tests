@@ -2,29 +2,9 @@
  * SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
  * SPDX-License-Identifier: MIT
  */
-import { test, expect, type Interop, type PionPeer, type RTPObservations } from "../fixtures/interop";
+import { test, expect, type PionPeer, type RTPObservations } from "../fixtures/interop";
 import { audioSink, oscillatorSource } from "../fixtures/media";
-import { audioCodecs, content, decodeRED, identity, wireLedger, type Codecs } from "../fixtures/opus-red";
-
-async function requireRED(interop: Interop, skip: (condition: boolean, note?: string) => void, direction: "Send" | "Receive") {
-  const capabilities = ["pion.opusRED", `browser.opusRED${direction}`] as const;
-  if (import.meta.env.VITE_REQUIRE_OPUS_RED !== "1") {
-    await interop.features.require({ skip }, ...capabilities);
-    return;
-  }
-  for (const name of capabilities) {
-    const support = await interop.features.check(name);
-    expect(support.supported, `${name}: ${support.reason ?? "required for RED validation"}`).toBe(true);
-  }
-}
-
-function preferRED(transceiver: RTCRtpTransceiver, direction: "send" | "receive") {
-  const capabilities = direction === "send" ? RTCRtpSender.getCapabilities("audio") : RTCRtpReceiver.getCapabilities("audio");
-  const codecs = capabilities!.codecs.filter(codec => ["audio/red", "audio/opus"].includes(codec.mimeType.toLowerCase()));
-  codecs.sort((left, right) => Number(right.mimeType.toLowerCase() === "audio/red") -
-    Number(left.mimeType.toLowerCase() === "audio/red"));
-  transceiver.setCodecPreferences(codecs);
-}
+import { audioCodecs, content, decodeRED, identity, wireLedger, preferAudioCodecs, requireRED, type Codecs } from "../fixtures/opus-red";
 
 const stats = async (browser: RTCPeerConnection) => Array.from((await browser.getStats()).values());
 const inbound = async (browser: RTCPeerConnection) => (await stats(browser)).find(stat =>
@@ -76,7 +56,7 @@ for (const startWithRED of [false, true]) {
     const playback = await audioSink(browser);
     try {
       const transceiver = browser.addTransceiver("audio", { direction: "recvonly" });
-      preferRED(transceiver, "receive");
+      preferAudioCodecs(transceiver, "receive");
       const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true, startWithRED });
       await interop.negotiate(browser, pion);
       const codecs = audioCodecs(browser.remoteDescription);
@@ -147,7 +127,7 @@ for (const undeclared of [false, true]) {
       const browser = interop.browserPeer();
       const track = media.stream.getAudioTracks()[0];
       const transceiver = browser.addTransceiver(track, { direction: "sendonly", streams: [media.stream] });
-      preferRED(transceiver, "send");
+      preferAudioCodecs(transceiver, "send");
       const pion = await interop.pionPeer({ behavior: "red-audio-receive", opusRED: true });
       if (undeclared) {
         await browser.setLocalDescription(await browser.createOffer());

@@ -5,17 +5,11 @@
 import { test, expect } from "../fixtures/interop";
 import { audioSink, oscillatorSource } from "../fixtures/media";
 
-import { audioCodecs, wireLedger, identity, content } from "../fixtures/opus-red";
+import { audioCodecs, wireLedger, identity, content, preferAudioCodecs, requireRED } from "../fixtures/opus-red";
 
 for (const offerer of ["browser", "pion"] as const) {
   test(`Opus RED audio round trip (${offerer} offers)`, async ({ interop, skip }) => {
-    const capabilities = ["pion.opusRED", "browser.opusREDSend", "browser.opusREDReceive"] as const;
-    if (import.meta.env.VITE_REQUIRE_OPUS_RED === "1") {
-      for (const name of capabilities) {
-        const support = await interop.features.check(name);
-        expect(support.supported, `${name}: ${support.reason ?? "required for RED validation"}`).toBe(true);
-      }
-    } else await interop.features.require({ skip }, ...capabilities);
+    await requireRED(interop, skip, "Send", "Receive");
 
     const media = await oscillatorSource();
     const browser = interop.browserPeer();
@@ -25,12 +19,7 @@ for (const offerer of ["browser", "pion"] as const) {
       const track = media.stream.getAudioTracks()[0];
       browser.addTrack(track, media.stream);
       const transceiver = browser.getTransceivers().find(item => item.sender.track === track)!;
-      // Preserve native capability records; RED preferences must keep Opus alongside it.
-      const codecs = RTCRtpReceiver.getCapabilities("audio")!.codecs.filter(codec =>
-        ["audio/red", "audio/opus"].includes(codec.mimeType.toLowerCase()));
-      codecs.sort((left, right) => Number(right.mimeType.toLowerCase() === "audio/red") -
-        Number(left.mimeType.toLowerCase() === "audio/red"));
-      transceiver.setCodecPreferences(codecs);
+      preferAudioCodecs(transceiver, "receive");
       if (offerer === "browser") await interop.negotiate(browser, pion);
       else await interop.negotiate(pion, browser);
       const incoming = audioCodecs(browser.localDescription);

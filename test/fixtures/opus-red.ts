@@ -2,10 +2,69 @@
  * SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
  * SPDX-License-Identifier: MIT
  */
-import { expect, type ObservedRTP } from "./interop";
+import { expect, type AudioCodecOrder, type Interop, type ObservedRTP } from "./interop";
 
 export type Codecs = { opus: number; red: number };
 type Block = { payloadType: number; offset: number; payload: string };
+
+// Matrix validation requires Pion while unsupported browser directions skip.
+// Strict mode also requires every browser direction used by the selected case.
+export async function requireRED(interop: Interop, skip: (condition: boolean, note?: string) => void,
+  ...directions: ("Send" | "Receive")[]) {
+  const mode = import.meta.env.VITE_REQUIRE_OPUS_RED;
+  expect([undefined, "", "pion", "1"], "VITE_REQUIRE_OPUS_RED must be unset, pion, or 1").toContain(mode);
+  const capabilities = ["pion.opusRED", ...directions.map(direction => `browser.opusRED${direction}` as const)] as const;
+  for (const name of capabilities) {
+    const support = await interop.features.check(name);
+    const reason = `${name}: ${support.reason ?? "required for RED validation"}`;
+    if (mode === "1" || mode === "pion" && name === "pion.opusRED") expect(support.supported, reason).toBe(true);
+    else skip(!support.supported, reason);
+  }
+}
+
+export function preferAudioCodecs(transceiver: RTCRtpTransceiver, direction: "send" | "receive",
+  order: AudioCodecOrder = "red-first") {
+  const capabilities = direction === "send" ? RTCRtpSender.getCapabilities("audio") : RTCRtpReceiver.getCapabilities("audio");
+  // Pass the browser's exact native records; do not invent or remap payload types.
+  const codecs = capabilities!.codecs.filter(codec => codec.mimeType.toLowerCase() === "audio/opus" ||
+    order !== "opus-only" && codec.mimeType.toLowerCase() === "audio/red");
+  codecs.sort((left, right) => (order === "red-first" ? 1 : -1) *
+    (Number(right.mimeType.toLowerCase() === "audio/red") - Number(left.mimeType.toLowerCase() === "audio/red")));
+  expect(codecs.some(codec => codec.mimeType.toLowerCase() === "audio/opus"), "browser supports Opus").toBe(true);
+  transceiver.setCodecPreferences(codecs);
+}
+
+export function opusOnlyCodec(description: RTCSessionDescriptionInit | null): number {
+  const audio = description?.sdp?.split(/(?=^m=)/m).find(section => section.startsWith("m=audio "));
+  expect(audio, "negotiated audio section").toBeDefined();
+  expect(audio, "answer must exclude unnegotiated RED").not.toMatch(/^a=rtpmap:\d+ red\//mi);
+  const opus = audio!.match(/^a=rtpmap:(\d+) opus\/48000\/2\r?$/mi);
+  expect(opus, "negotiated Opus").not.toBeNull();
+  expect(audio!.split(/\r?\n/)[0].split(" ").slice(3).map(Number), "only Opus is negotiated")
+    .toEqual([Number(opus![1])]);
+  return Number(opus![1]);
+}
+
+export function opusLedger(packets: ObservedRTP[], payloadType: number, source?: ObservedRTP[]) {
+  const primary = new Map<string, ObservedRTP>();
+  let padding = 0;
+  for (const packet of packets) {
+    expect(packet.payloadType, "fallback wire/application packet uses negotiated Opus").toBe(payloadType);
+    if (packet.padding && packet.payload === "") {
+      expect(packet.paddingSize, "valid Opus padding-only RTP").toBeGreaterThan(0);
+      padding++;
+      continue;
+    }
+    expect(packet.payload.length, "nonempty Opus media").toBeGreaterThan(0);
+    expect(primary.has(identity(packet)), "no duplicate Opus packet identities").toBe(false);
+    const value = content(packet);
+    if (source) expect(value, "plain Opus matches source bytes and RTP identity")
+      .toEqual(source.find(packet => identity(packet) === identity(value)));
+    primary.set(identity(value), value);
+  }
+  expect(primary.size, "actual plain Opus media").toBeGreaterThan(25);
+  return { primary, padding };
+}
 
 export function audioCodecs(description: RTCSessionDescriptionInit | null): Codecs {
   const audio = description?.sdp?.split(/(?=^m=)/m).find(section => section.startsWith("m=audio "));

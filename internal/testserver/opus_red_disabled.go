@@ -17,6 +17,7 @@ func opusREDSupport() featureSupport {
 
 func newOpusREDPeer(
 	_ webrtc.SettingEngine, _ webrtc.Configuration, _ *rtpRecorder,
+	_ redPeerOptions,
 ) (*webrtc.PeerConnection, error) {
 	return nil, errors.New(opusREDSupport().Reason)
 }
