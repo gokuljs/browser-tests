@@ -45,7 +45,7 @@ export function expectedDeliveries(source: ObservedRTP[], carriers: ObservedRTP[
     previous = packet.sequenceNumber;
     positions.set(identity(packet), extended);
   });
-  const output: ObservedRTP[] = [], delivered = new Set<string>(), padding = new Set<number>();
+  const output: ObservedRTP[] = [], delivered = new Set<number>(), padding = new Set<number>();
   let highest: number | undefined;
   for (const carrier of carriers) {
     if (carrier.padding && carrier.payload === "") {
@@ -57,6 +57,7 @@ export function expectedDeliveries(source: ObservedRTP[], carriers: ObservedRTP[
         padding.clear();
       }
       padding.add(position);
+      delivered.add(position);
       highest = Math.max(highest ?? position, position);
       continue;
     }
@@ -83,9 +84,9 @@ export function expectedDeliveries(source: ObservedRTP[], carriers: ObservedRTP[
       const copy = content(candidates[0]), copyPosition = positions.get(identity(copy))!;
       if (block.offset === 0 || !block.payload || reference - copyPosition >= 64 ||
           Array.from(padding).some(sequence => sequence >= copyPosition && sequence < position)) continue;
-      if (!delivered.has(identity(copy))) { output.push(copy); delivered.add(identity(copy)); }
+      if (!delivered.has(copyPosition)) { output.push(copy); delivered.add(copyPosition); }
     }
-    if (!delivered.has(identity(primarySource!))) { output.push(primarySource!); delivered.add(identity(primarySource!)); }
+    if (!delivered.has(position)) { output.push(primarySource!); delivered.add(position); }
     highest = reference;
   }
   return output;

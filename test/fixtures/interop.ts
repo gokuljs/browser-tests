@@ -26,6 +26,10 @@ export type ObservedRTP = {
   payload: string;
   padding?: boolean;
   paddingSize?: number;
+  csrc?: number[];
+  extensions?: { id: number; payload: string }[];
+  headerSize?: number;
+  packetSize?: number;
 };
 
 export type RTPObservations = {
@@ -35,18 +39,21 @@ export type RTPObservations = {
   source: ObservedRTP[];
   droppedOutbound: ObservedRTP[];
   errors: string[];
+  injectedErrors: string[];
   truncated: boolean;
   sourceDone: boolean;
   drained: boolean;
   inboundOriginal: ObservedRTP[];
-  inboundActions: { kind: "hold" | "release" | "duplicate" | "drop"; ordinal: number }[];
+  inboundActions: { kind: "hold" | "release" | "duplicate" | "drop" | "mutate"; ordinal: number }[];
 };
 
 export type REDSourceOptions = {
   packets?: number; trailers?: number; sequenceStart?: number; timestampStart?: number; intervalMs?: number;
-  packetOverrides?: { index: number; sequenceNumber?: number; timestamp?: number; payload?: string; opusFrames?: number }[];
+  packetOverrides?: { index: number; sequenceNumber?: number; timestamp?: number; payload?: string; opusFrames?: number;
+    csrc?: number[]; extensions?: { id: number; payload: string }[]; paddingSize?: number }[];
 };
-export type REDImpairmentOptions = { outboundDrop?: number[]; inboundOrder?: number[] };
+export type REDImpairmentOptions = { outboundDrop?: number[]; inboundOrder?: number[];
+  inboundPayloads?: { index: number; payload: string; expectedError: string }[] };
 
 export type AudioCodecOrder = "red-first" | "opus-first" | "opus-only";
 
