@@ -30,24 +30,27 @@ type observedRTP struct {
 }
 
 type rtpSnapshot struct {
-	ActiveMediaReaders int           `json:"activeMediaReaders"`
-	ActiveMediaWriters int           `json:"activeMediaWriters"`
-	Inbound            []observedRTP `json:"inbound"`
-	InboundOriginal    []observedRTP `json:"inboundOriginal"`
-	InboundActions     []rtpAction   `json:"inboundActions"`
-	Outbound           []observedRTP `json:"outbound"`
-	Application        []observedRTP `json:"application"`
-	Source             []observedRTP `json:"source"`
-	DroppedOutbound    []observedRTP `json:"droppedOutbound"`
-	Errors             []string      `json:"errors"`
-	InjectedErrors     []string      `json:"injectedErrors"`
-	Truncated          bool          `json:"truncated"`
-	SourceDone         bool          `json:"sourceDone"`
-	Drained            bool          `json:"drained"`
+	Totals             map[string]uint64 `json:"totals"`
+	Summaries          rtpSummaries      `json:"summaries"`
+	ActiveMediaReaders int               `json:"activeMediaReaders"`
+	ActiveMediaWriters int               `json:"activeMediaWriters"`
+	Inbound            []observedRTP     `json:"inbound"`
+	InboundOriginal    []observedRTP     `json:"inboundOriginal"`
+	InboundActions     []rtpAction       `json:"inboundActions"`
+	Outbound           []observedRTP     `json:"outbound"`
+	Application        []observedRTP     `json:"application"`
+	Source             []observedRTP     `json:"source"`
+	DroppedOutbound    []observedRTP     `json:"droppedOutbound"`
+	Errors             []string          `json:"errors"`
+	InjectedErrors     []string          `json:"injectedErrors"`
+	Truncated          bool              `json:"truncated"`
+	SourceDone         bool              `json:"sourceDone"`
+	Drained            bool              `json:"drained"`
 }
 
 // RED peers retain a bounded prefix; ordinary peers have no recorder.
 type rtpRecorder struct {
+	statistics           rtpStatistics
 	mu                   sync.Mutex
 	observation          rtpSnapshot
 	startWithRED         bool
@@ -84,6 +87,7 @@ func (r *rtpRecorder) record(target *[]observedRTP, header *rtp.Header, payload 
 }
 
 func (r *rtpRecorder) recordLocked(target *[]observedRTP, header *rtp.Header, payload []byte) {
+	r.recordStatisticsLocked(target, header, payload)
 	limit := r.observationLimit
 	if limit == 0 {
 		limit = maxRTPObservations
@@ -132,8 +136,10 @@ func (r *rtpRecorder) recordError(err error) {
 func (r *rtpRecorder) snapshot() rtpSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	totals, summaries := r.statistics.snapshot()
 
 	return rtpSnapshot{
+		Totals: totals, Summaries: summaries,
 		ActiveMediaReaders: r.observation.ActiveMediaReaders,
 		ActiveMediaWriters: r.observation.ActiveMediaWriters,
 		Inbound:            append([]observedRTP{}, r.observation.Inbound...),
@@ -167,7 +173,7 @@ func (o *rtpObserver) BindLocalStream(info *interceptor.StreamInfo, writer inter
 		if o.recorder.dropOutbound(header, payload, uint8(info.PayloadType)) {
 			return header.MarshalSize() + len(payload), nil
 		}
-		o.recorder.record(&o.recorder.observation.Outbound, header, payload)
+		o.recorder.recordWire(&o.recorder.observation.Outbound, header, payload, info.PayloadTypeForwardErrorCorrection)
 		n, err := writer.Write(header, payload, attributes)
 		o.recorder.recordError(err)
 
@@ -206,7 +212,7 @@ func (o *rtpObserver) BindRemoteStream(info *interceptor.StreamInfo, reader inte
 		if parseErr := packet.Unmarshal(buffer[:n]); parseErr != nil {
 			o.recorder.recordError(parseErr)
 		} else {
-			o.recorder.record(&o.recorder.observation.Inbound, &packet.Header, packet.Payload)
+			o.recorder.recordWire(&o.recorder.observation.Inbound, &packet.Header, packet.Payload, info.PayloadTypeForwardErrorCorrection)
 			pendingDrain = o.recorder.isDrainSentinel(&packet, uint8(info.PayloadType), info.SSRC)
 		}
 

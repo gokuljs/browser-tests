@@ -27,6 +27,11 @@ export async function mediaSource(kind: "audio" | "video") {
   } };
 }
 
+const contextState = (context: AudioContext) => ({ state: context.state, currentTime: context.currentTime,
+  sampleRate: context.sampleRate, baseLatency: context.baseLatency, outputLatency: context.outputLatency });
+const trackState = (track: MediaStreamTrack | undefined) => track &&
+  ({ enabled: track.enabled, muted: track.muted, readyState: track.readyState });
+
 // A known non-silent source independent of fake microphone settings.
 export async function oscillatorSource(frequency = 440) {
   const context = new AudioContext({ sampleRate: 48000 });
@@ -38,7 +43,9 @@ export async function oscillatorSource(frequency = 440) {
   oscillator.connect(gain).connect(destination);
   oscillator.start();
   await context.resume();
-  return { stream: destination.stream, close: async () => {
+  return { stream: destination.stream,
+    diagnostics: () => ({ context: contextState(context), track: trackState(destination.stream.getAudioTracks()[0]) }),
+    close: async () => {
     oscillator.stop();
     destination.stream.getTracks().forEach(track => track.stop());
     await context.close();
@@ -58,11 +65,13 @@ export async function audioSink(browser: RTCPeerConnection) {
   output.gain.value = 0;
   analyser.connect(output).connect(context.destination);
   let receivedTrack = false;
+  let remoteTrack: MediaStreamTrack | undefined;
   const receive = ({ track }: RTCTrackEvent) => {
     if (track.kind !== "audio") return;
     const stream = new MediaStream([track]);
     sink.srcObject = stream;
     context.createMediaStreamSource(stream).connect(analyser);
+    remoteTrack = track;
     receivedTrack = true;
   };
   browser.addEventListener("track", receive);
@@ -70,6 +79,8 @@ export async function audioSink(browser: RTCPeerConnection) {
   const waveform = new Float32Array(analyser.fftSize);
   return {
     receivedTrack: () => receivedTrack,
+    diagnostics: () => ({ context: contextState(context), track: trackState(remoteTrack),
+      paused: sink.paused, readyState: sink.readyState, visibility: document.visibilityState }),
     rms: () => {
       analyser.getFloatTimeDomainData(waveform);
       return Math.sqrt(waveform.reduce((sum, sample) => sum + sample * sample, 0) / waveform.length);

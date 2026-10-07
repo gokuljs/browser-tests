@@ -46,6 +46,7 @@ export function opusOnlyCodec(description: RTCSessionDescriptionInit | null): nu
 }
 
 export function opusLedger(packets: ObservedRTP[], payloadType: number, source?: ObservedRTP[]) {
+  const authoritative = source?.map(content);
   const primary = new Map<string, ObservedRTP>();
   let padding = 0;
   for (const packet of packets) {
@@ -58,8 +59,8 @@ export function opusLedger(packets: ObservedRTP[], payloadType: number, source?:
     expect(packet.payload.length, "nonempty Opus media").toBeGreaterThan(0);
     expect(primary.has(identity(packet)), "no duplicate Opus packet identities").toBe(false);
     const value = content(packet);
-    if (source) expect(value, "plain Opus matches source bytes and RTP identity")
-      .toEqual(source.find(packet => identity(packet) === identity(value)));
+    if (authoritative) expect(value, "plain Opus matches source bytes and RTP identity")
+      .toEqual(authoritative.find(packet => identity(packet) === identity(value)));
     primary.set(identity(value), value);
   }
   expect(primary.size, "actual plain Opus media").toBeGreaterThan(25);

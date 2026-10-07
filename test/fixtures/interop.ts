@@ -33,6 +33,8 @@ export type ObservedRTP = {
 };
 
 export type RTPObservations = {
+  totals: Record<"source" | "outbound" | "inbound" | "inboundOriginal" | "application" | "droppedOutbound" | "inboundRED" | "outboundRED", number>;
+  summaries: { source: Record<string, RTPSummary>; application: Record<string, RTPSummary> };
   activeMediaReaders: number; activeMediaWriters: number;
   inbound: ObservedRTP[];
   outbound: ObservedRTP[];
@@ -49,10 +51,13 @@ export type RTPObservations = {
 };
 
 export type REDSourceOptions = {
+  stream?: boolean;
   tracks?: number; packets?: number; trailers?: number; sequenceStart?: number; timestampStart?: number; intervalMs?: number;
   packetOverrides?: { index: number; sequenceNumber?: number; timestamp?: number; payload?: string; opusFrames?: number;
     csrc?: number[]; extensions?: { id: number; payload: string }[]; paddingSize?: number }[];
 };
+
+export type RTPSummary = { count: number; sha256: string; lastSequenceNumber: number; lastTimestamp: number };
 export type REDImpairmentOptions = { outboundDrop?: number[]; inboundOrder?: number[];
   inboundPayloads?: { index: number; payload: string; expectedError: string }[] };
 
