@@ -6,6 +6,7 @@ package testserver
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/pion/rtp"
 )
@@ -22,16 +23,31 @@ type redSourceOptions struct {
 }
 
 type redPacketOverride struct {
-	Index          int     `json:"index"`
-	SequenceNumber *uint16 `json:"sequenceNumber"`
-	Timestamp      *uint32 `json:"timestamp"`
-	Payload        *[]byte `json:"payload"`
-	OpusFrames     int     `json:"opusFrames"`
+	Index          int                  `json:"index"`
+	SequenceNumber *uint16              `json:"sequenceNumber"`
+	Timestamp      *uint32              `json:"timestamp"`
+	Payload        *[]byte              `json:"payload"`
+	OpusFrames     int                  `json:"opusFrames"`
+	CSRC           []uint32             `json:"csrc"`
+	Extensions     []redHeaderExtension `json:"extensions"`
+	PaddingSize    uint8                `json:"paddingSize"`
+}
+
+type redHeaderExtension struct {
+	ID      uint8  `json:"id"`
+	Payload []byte `json:"payload"`
+}
+
+type redPayloadMutation struct {
+	Index         int    `json:"index"`
+	Payload       []byte `json:"payload"`
+	ExpectedError string `json:"expectedError"`
 }
 
 type redImpairmentOptions struct {
-	OutboundDrop []int `json:"outboundDrop"`
-	InboundOrder []int `json:"inboundOrder"`
+	OutboundDrop    []int                `json:"outboundDrop"`
+	InboundOrder    []int                `json:"inboundOrder"`
+	InboundPayloads []redPayloadMutation `json:"inboundPayloads"`
 }
 
 type redSourceConfig struct {
@@ -93,6 +109,19 @@ func sourceConfig(options *redSourceOptions) (redSourceConfig, error) {
 			value := append([]byte{}, (*override.Payload)...)
 			override.Payload = &value
 		}
+		if len(override.CSRC) > 15 {
+			return redSourceConfig{}, fmt.Errorf("%w: RTP allows at most 15 CSRCs", errInvalidREDControl)
+		}
+		override.CSRC = append([]uint32(nil), override.CSRC...)
+		override.Extensions = append([]redHeaderExtension(nil), override.Extensions...)
+		extensionIDs := make(map[uint8]bool)
+		for index, extension := range override.Extensions {
+			if extension.ID < 1 || extension.ID > 14 || len(extension.Payload) < 1 || len(extension.Payload) > 16 || extensionIDs[extension.ID] {
+				return redSourceConfig{}, fmt.Errorf("%w: require unique one-byte RTP extension IDs 1..14 and 1..16 payload bytes", errInvalidREDControl)
+			}
+			extensionIDs[extension.ID] = true
+			override.Extensions[index].Payload = append([]byte(nil), extension.Payload...)
+		}
 		configuration.packetOverrides[override.Index] = override
 	}
 	identities := make(map[redSourceIdentity]bool)
@@ -148,6 +177,23 @@ func newRTPRecorder(
 			}
 			recorder.inboundOrder = append([]int{}, impairment.InboundOrder...)
 		}
+		if len(impairment.InboundPayloads) > 0 {
+			if source == nil {
+				return nil, fmt.Errorf("%w: inboundPayloads requires an explicit bounded redSource", errInvalidREDControl)
+			}
+			recorder.inboundPayloads = make(map[int]redPayloadMutation)
+			for _, mutation := range impairment.InboundPayloads {
+				_, duplicate := recorder.inboundPayloads[mutation.Index]
+				decoderError := strings.HasPrefix(mutation.ExpectedError, "invalid RED payload:") ||
+					strings.HasPrefix(mutation.ExpectedError, "unexpected RED primary payload type:") || mutation.ExpectedError == "RED primary payload is empty"
+				if mutation.Index < 0 || mutation.Index >= configuration.packets+configuration.trailers || duplicate ||
+					len(mutation.Payload) > 4096 || !decoderError {
+					return nil, fmt.Errorf("%w: invalid inboundPayloads mutation at index %d", errInvalidREDControl, mutation.Index)
+				}
+				mutation.Payload = append([]byte{}, mutation.Payload...)
+				recorder.inboundPayloads[mutation.Index] = mutation
+			}
+		}
 	}
 
 	return recorder, nil
@@ -166,6 +212,12 @@ func (source redSourceConfig) header(index int, payloadType uint8, ssrc uint32) 
 		if override.Timestamp != nil {
 			header.Timestamp = *override.Timestamp
 		}
+		header.CSRC = append([]uint32(nil), override.CSRC...)
+		for _, extension := range override.Extensions {
+			// Configuration validates the one-byte extension bounds above.
+			_ = header.SetExtension(extension.ID, extension.Payload)
+		}
+		header.Padding, header.PaddingSize = override.PaddingSize != 0, override.PaddingSize
 	}
 
 	return header

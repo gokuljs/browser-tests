@@ -190,6 +190,9 @@ func redAudioReceive(pc *webrtc.PeerConnection, observation *rtpRecorder) error 
 		for {
 			packet, _, err := remote.ReadRTP()
 			if err != nil {
+				if observation.consumeInjectedError(err) {
+					continue
+				}
 				observation.recordError(err)
 
 				return

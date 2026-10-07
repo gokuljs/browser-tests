@@ -45,6 +45,7 @@ func TestPeerIsolationAndLifecycle(t *testing.T) {
 	call("POST", "/peers", `{"opusRED":true,"opusREDPayloadTypes":{"opus":111,"red":111}}`, 400)
 	call("POST", "/peers", `{"opusRED":true,"audioCodecOrder":"unknown"}`, 400)
 	call("POST", "/peers", `{"opusRED":true,"behavior":"red-audio-receive","startWithRED":true}`, 400)
+	call("POST", "/peers", `{"opusRED":true,"behavior":"red-audio-send","redSource":{"packets":2},"redImpairment":{"inboundPayloads":[{"index":1,"payload":"7w==","expectedError":"invalid RED payload: malformed RED payload"}]}}`, 400)
 	first, second := create(), create()
 	require.NotEqual(t, first, second, "peer IDs reused")
 	call("POST", first+"/set-remote-description", `{"type":"offer","sdp":"invalid"}`, 400)

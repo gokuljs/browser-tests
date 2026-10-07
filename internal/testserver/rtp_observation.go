@@ -16,13 +16,17 @@ import (
 const maxRTPObservations = 256
 
 type observedRTP struct {
-	SSRC           uint32 `json:"ssrc"`
-	SequenceNumber uint16 `json:"sequenceNumber"`
-	Timestamp      uint32 `json:"timestamp"`
-	PayloadType    uint8  `json:"payloadType"`
-	Payload        []byte `json:"payload"`
-	Padding        bool   `json:"padding,omitempty"`
-	PaddingSize    uint8  `json:"paddingSize,omitempty"`
+	SSRC           uint32               `json:"ssrc"`
+	SequenceNumber uint16               `json:"sequenceNumber"`
+	Timestamp      uint32               `json:"timestamp"`
+	PayloadType    uint8                `json:"payloadType"`
+	Payload        []byte               `json:"payload"`
+	Padding        bool                 `json:"padding,omitempty"`
+	PaddingSize    uint8                `json:"paddingSize,omitempty"`
+	CSRC           []uint32             `json:"csrc,omitempty"`
+	Extensions     []redHeaderExtension `json:"extensions,omitempty"`
+	HeaderSize     int                  `json:"headerSize"`
+	PacketSize     int                  `json:"packetSize"`
 }
 
 type rtpSnapshot struct {
@@ -34,6 +38,7 @@ type rtpSnapshot struct {
 	Source          []observedRTP `json:"source"`
 	DroppedOutbound []observedRTP `json:"droppedOutbound"`
 	Errors          []string      `json:"errors"`
+	InjectedErrors  []string      `json:"injectedErrors"`
 	Truncated       bool          `json:"truncated"`
 	SourceDone      bool          `json:"sourceDone"`
 	Drained         bool          `json:"drained"`
@@ -41,23 +46,31 @@ type rtpSnapshot struct {
 
 // RED peers retain a bounded prefix; ordinary peers have no recorder.
 type rtpRecorder struct {
-	mu                sync.Mutex
-	observation       rtpSnapshot
-	startWithRED      bool
-	observationLimit  int
-	source            redSourceConfig
-	outboundDrop      map[int]bool
-	outboundOrdinal   int
-	startupSuppressed bool
-	inboundOrder      []int
+	mu                   sync.Mutex
+	observation          rtpSnapshot
+	startWithRED         bool
+	observationLimit     int
+	source               redSourceConfig
+	outboundDrop         map[int]bool
+	outboundOrdinal      int
+	startupSuppressed    bool
+	inboundOrder         []int
+	inboundPayloads      map[int]redPayloadMutation
+	pendingInjectedError string
 }
 
 func observeRTP(header *rtp.Header, payload []byte) observedRTP {
-	return observedRTP{
+	observed := observedRTP{
 		SSRC: header.SSRC, SequenceNumber: header.SequenceNumber, Timestamp: header.Timestamp,
 		PayloadType: header.PayloadType, Payload: append([]byte{}, payload...),
 		Padding: header.Padding, PaddingSize: header.PaddingSize,
+		CSRC:       append([]uint32(nil), header.CSRC...),
+		HeaderSize: header.MarshalSize(), PacketSize: header.MarshalSize() + len(payload) + int(header.PaddingSize),
 	}
+	for _, id := range header.GetExtensionIDs() {
+		observed.Extensions = append(observed.Extensions, redHeaderExtension{ID: id, Payload: append([]byte{}, header.GetExtension(id)...)})
+	}
+	return observed
 }
 
 func (r *rtpRecorder) record(target *[]observedRTP, header *rtp.Header, payload []byte) {
@@ -125,7 +138,8 @@ func (r *rtpRecorder) snapshot() rtpSnapshot {
 		Source:          append([]observedRTP{}, r.observation.Source...),
 		DroppedOutbound: append([]observedRTP{}, r.observation.DroppedOutbound...),
 		Errors:          append([]string{}, r.observation.Errors...), Truncated: r.observation.Truncated,
-		SourceDone: r.observation.SourceDone, Drained: r.observation.Drained,
+		InjectedErrors: append([]string{}, r.observation.InjectedErrors...),
+		SourceDone:     r.observation.SourceDone, Drained: r.observation.Drained,
 	}
 }
 
@@ -161,6 +175,9 @@ func (o *rtpObserver) BindRemoteStream(info *interceptor.StreamInfo, reader inte
 	}
 	if o.recorder.inboundOrder != nil {
 		reader = newREDOrderedReader(o.recorder, info, reader)
+	}
+	if len(o.recorder.inboundPayloads) > 0 {
+		reader = newREDMutationReader(o.recorder, info, reader)
 	}
 	pendingDrain := false
 
