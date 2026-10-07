@@ -33,6 +33,7 @@ export type ObservedRTP = {
 };
 
 export type RTPObservations = {
+  activeMediaReaders: number; activeMediaWriters: number;
   inbound: ObservedRTP[];
   outbound: ObservedRTP[];
   application: ObservedRTP[];
@@ -48,7 +49,7 @@ export type RTPObservations = {
 };
 
 export type REDSourceOptions = {
-  packets?: number; trailers?: number; sequenceStart?: number; timestampStart?: number; intervalMs?: number;
+  tracks?: number; packets?: number; trailers?: number; sequenceStart?: number; timestampStart?: number; intervalMs?: number;
   packetOverrides?: { index: number; sequenceNumber?: number; timestamp?: number; payload?: string; opusFrames?: number;
     csrc?: number[]; extensions?: { id: number; payload: string }[]; paddingSize?: number }[];
 };
@@ -87,6 +88,8 @@ export class PionPeer {
   createDataChannel(label: string, options: RTCDataChannelInit = {}): Promise<void> {
     return this.command("create-data-channel", { label, options });
   }
+  replaceAudioTrack(index = 0): Promise<void> { return this.command("replace-red-audio", { index }); }
+  closeMedia(): Promise<RTPObservations> { return this.command("close-red-media"); }
   snapshot(): Promise<Snapshot> { return request(`/peers/${this.id}`); }
   stats(): Promise<Record<string, unknown>> { return request(`/peers/${this.id}/stats`); }
   rtp(): Promise<RTPObservations> { return request(`/peers/${this.id}/rtp`); }

@@ -14,6 +14,7 @@ import (
 const maxRTPObservationLimit = 4096
 
 type redSourceOptions struct {
+	Tracks          int                 `json:"tracks"`
 	Packets         int                 `json:"packets"`
 	Trailers        int                 `json:"trailers"`
 	SequenceStart   *uint16             `json:"sequenceStart"`
@@ -51,6 +52,7 @@ type redImpairmentOptions struct {
 }
 
 type redSourceConfig struct {
+	tracks          int
 	packets         int
 	trailers        int
 	sequenceStart   uint16
@@ -64,7 +66,7 @@ var errInvalidREDControl = errors.New("invalid RED test controls") //nolint:goch
 
 func sourceConfig(options *redSourceOptions) (redSourceConfig, error) {
 	configuration := redSourceConfig{
-		packets: redAudioPacketCount, sequenceStart: 1000, timestampStart: 48000, intervalMS: 20,
+		tracks: 1, packets: redAudioPacketCount, sequenceStart: 1000, timestampStart: 48000, intervalMS: 20,
 		controlled: options != nil,
 	}
 	if options == nil {
@@ -72,6 +74,9 @@ func sourceConfig(options *redSourceOptions) (redSourceConfig, error) {
 	}
 	if options.Packets != 0 {
 		configuration.packets = options.Packets
+	}
+	if options.Tracks != 0 {
+		configuration.tracks = options.Tracks
 	}
 	configuration.trailers = options.Trailers
 	if options.SequenceStart != nil {
@@ -83,10 +88,12 @@ func sourceConfig(options *redSourceOptions) (redSourceConfig, error) {
 	if options.IntervalMS != nil {
 		configuration.intervalMS = *options.IntervalMS
 	}
-	if configuration.packets < 1 || configuration.trailers < 0 || configuration.trailers > 2 ||
+	if configuration.tracks < 1 || configuration.tracks > 2 ||
+		configuration.packets < 1 || configuration.trailers < 0 || configuration.trailers > 2 ||
 		configuration.packets > maxRTPObservationLimit-1-configuration.trailers ||
+		configuration.tracks*(configuration.packets+configuration.trailers+1) > maxRTPObservationLimit ||
 		configuration.intervalMS < 0 || configuration.intervalMS > 1000 {
-		return redSourceConfig{}, fmt.Errorf("%w: require 1..4095 total packets, 0..2 trailers, intervalMs 0..1000",
+		return redSourceConfig{}, fmt.Errorf("%w: require 1..2 tracks, at most 4096 total observations, 0..2 trailers, intervalMs 0..1000",
 			errInvalidREDControl)
 	}
 	configuration.packetOverrides = make(map[int]redPacketOverride)
@@ -159,6 +166,9 @@ func newRTPRecorder(
 		outboundDrop: make(map[int]bool),
 	}
 	if impairment != nil {
+		if configuration.tracks > 1 {
+			return nil, fmt.Errorf("%w: multi-track sources do not accept packet impairment controls", errInvalidREDControl)
+		}
 		recorder.source.controlled = true
 		for _, ordinal := range impairment.OutboundDrop {
 			if ordinal < 0 || ordinal >= configuration.packets+configuration.trailers || recorder.outboundDrop[ordinal] {

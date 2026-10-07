@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pion/logging"
 	"github.com/pion/webrtc/v4"
@@ -31,6 +32,7 @@ var behaviors = map[string]behavior{ //nolint:gochecknoglobals
 	"media-echo":        {setup: mediaEcho},
 	"red-audio-send":    {},
 	"red-audio-receive": {},
+	"red-bundled-echo":  {},
 }
 
 type peer struct {
@@ -131,8 +133,13 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	if (body.Behavior == "red-audio-send" || body.Behavior == "red-audio-receive") && !body.OpusRED {
+	if (body.Behavior == "red-audio-send" || body.Behavior == "red-audio-receive" || body.Behavior == "red-bundled-echo") && !body.OpusRED {
 		http.Error(res, "RED audio behaviors require opusRED", http.StatusBadRequest)
+
+		return
+	}
+	if body.REDSource != nil && body.REDSource.Tracks > 1 && body.Behavior != "red-audio-send" {
+		http.Error(res, "multiple RED source tracks require red-audio-send", http.StatusBadRequest)
 
 		return
 	}
@@ -218,6 +225,15 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	var mediaStateChange func(webrtc.PeerConnectionState)
 	if observation != nil && body.Behavior == "media-echo" {
 		setup = func(pc *webrtc.PeerConnection) error { return mediaEchoObserved(pc, observation) }
+	}
+	if body.Behavior == "red-bundled-echo" {
+		setup = func(pc *webrtc.PeerConnection) error {
+			if setupErr := mediaEchoObserved(pc, observation); setupErr != nil {
+				return setupErr
+			}
+
+			return echo(pc)
+		}
 	}
 	if body.Behavior == "red-audio-receive" {
 		setup = func(pc *webrtc.PeerConnection) error { return redAudioReceive(pc, observation) }
@@ -332,6 +348,38 @@ func (s *Server) operate(res http.ResponseWriter, req *http.Request) {
 	var result any = map[string]any{}
 	var err error
 	switch req.PathValue("operation") {
+	case "replace-red-audio":
+		if session.observations == nil {
+			http.Error(res, "audio replacement requires a RED sender", http.StatusBadRequest)
+
+			return
+		}
+		var options struct {
+			Index int `json:"index"`
+		}
+		if !decode(res, req, &options) {
+			return
+		}
+		err = session.observations.replaceAudioTrack(options.Index)
+	case "close-red-media":
+		if session.observations == nil {
+			http.Error(res, "media drain observations require a RED peer", http.StatusBadRequest)
+
+			return
+		}
+		err = session.pc.Close()
+		if err == nil {
+			deadline := time.Now().Add(5 * time.Second)
+			for !session.observations.mediaStopped() {
+				if time.Now().After(deadline) {
+					err = fmt.Errorf("RED media readers or writers did not stop after close")
+
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}
+		result = session.observations.snapshot()
 	case "create-offer":
 		var options struct {
 			webrtc.OfferOptions
