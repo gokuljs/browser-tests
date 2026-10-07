@@ -28,12 +28,12 @@ export async function mediaSource(kind: "audio" | "video") {
 }
 
 // A known non-silent source independent of fake microphone settings.
-export async function oscillatorSource() {
+export async function oscillatorSource(frequency = 440) {
   const context = new AudioContext({ sampleRate: 48000 });
   const oscillator = context.createOscillator();
   const gain = context.createGain();
   const destination = context.createMediaStreamDestination();
-  oscillator.frequency.value = 440;
+  oscillator.frequency.value = frequency;
   gain.gain.value = 0.2;
   oscillator.connect(gain).connect(destination);
   oscillator.start();

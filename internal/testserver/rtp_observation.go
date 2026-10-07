@@ -30,18 +30,20 @@ type observedRTP struct {
 }
 
 type rtpSnapshot struct {
-	Inbound         []observedRTP `json:"inbound"`
-	InboundOriginal []observedRTP `json:"inboundOriginal"`
-	InboundActions  []rtpAction   `json:"inboundActions"`
-	Outbound        []observedRTP `json:"outbound"`
-	Application     []observedRTP `json:"application"`
-	Source          []observedRTP `json:"source"`
-	DroppedOutbound []observedRTP `json:"droppedOutbound"`
-	Errors          []string      `json:"errors"`
-	InjectedErrors  []string      `json:"injectedErrors"`
-	Truncated       bool          `json:"truncated"`
-	SourceDone      bool          `json:"sourceDone"`
-	Drained         bool          `json:"drained"`
+	ActiveMediaReaders int           `json:"activeMediaReaders"`
+	ActiveMediaWriters int           `json:"activeMediaWriters"`
+	Inbound            []observedRTP `json:"inbound"`
+	InboundOriginal    []observedRTP `json:"inboundOriginal"`
+	InboundActions     []rtpAction   `json:"inboundActions"`
+	Outbound           []observedRTP `json:"outbound"`
+	Application        []observedRTP `json:"application"`
+	Source             []observedRTP `json:"source"`
+	DroppedOutbound    []observedRTP `json:"droppedOutbound"`
+	Errors             []string      `json:"errors"`
+	InjectedErrors     []string      `json:"injectedErrors"`
+	Truncated          bool          `json:"truncated"`
+	SourceDone         bool          `json:"sourceDone"`
+	Drained            bool          `json:"drained"`
 }
 
 // RED peers retain a bounded prefix; ordinary peers have no recorder.
@@ -57,6 +59,8 @@ type rtpRecorder struct {
 	inboundOrder         []int
 	inboundPayloads      map[int]redPayloadMutation
 	pendingInjectedError string
+	audioSenders         []*redAudioTrack
+	sourcesCompleted     int
 }
 
 func observeRTP(header *rtp.Header, payload []byte) observedRTP {
@@ -130,14 +134,16 @@ func (r *rtpRecorder) snapshot() rtpSnapshot {
 	defer r.mu.Unlock()
 
 	return rtpSnapshot{
-		Inbound:         append([]observedRTP{}, r.observation.Inbound...),
-		InboundOriginal: append([]observedRTP{}, r.observation.InboundOriginal...),
-		InboundActions:  append([]rtpAction{}, r.observation.InboundActions...),
-		Outbound:        append([]observedRTP{}, r.observation.Outbound...),
-		Application:     append([]observedRTP{}, r.observation.Application...),
-		Source:          append([]observedRTP{}, r.observation.Source...),
-		DroppedOutbound: append([]observedRTP{}, r.observation.DroppedOutbound...),
-		Errors:          append([]string{}, r.observation.Errors...), Truncated: r.observation.Truncated,
+		ActiveMediaReaders: r.observation.ActiveMediaReaders,
+		ActiveMediaWriters: r.observation.ActiveMediaWriters,
+		Inbound:            append([]observedRTP{}, r.observation.Inbound...),
+		InboundOriginal:    append([]observedRTP{}, r.observation.InboundOriginal...),
+		InboundActions:     append([]rtpAction{}, r.observation.InboundActions...),
+		Outbound:           append([]observedRTP{}, r.observation.Outbound...),
+		Application:        append([]observedRTP{}, r.observation.Application...),
+		Source:             append([]observedRTP{}, r.observation.Source...),
+		DroppedOutbound:    append([]observedRTP{}, r.observation.DroppedOutbound...),
+		Errors:             append([]string{}, r.observation.Errors...), Truncated: r.observation.Truncated,
 		InjectedErrors: append([]string{}, r.observation.InjectedErrors...),
 		SourceDone:     r.observation.SourceDone, Drained: r.observation.Drained,
 	}
