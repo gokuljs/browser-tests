@@ -13,7 +13,10 @@ import (
 
 const maxRTPObservationLimit = 4096
 
+const maxREDStressPackets = 70000
+
 type redSourceOptions struct {
+	Stream          bool                `json:"stream"`
 	Tracks          int                 `json:"tracks"`
 	Packets         int                 `json:"packets"`
 	Trailers        int                 `json:"trailers"`
@@ -52,6 +55,7 @@ type redImpairmentOptions struct {
 }
 
 type redSourceConfig struct {
+	stream          bool
 	tracks          int
 	packets         int
 	trailers        int
@@ -79,6 +83,7 @@ func sourceConfig(options *redSourceOptions) (redSourceConfig, error) {
 		configuration.tracks = options.Tracks
 	}
 	configuration.trailers = options.Trailers
+	configuration.stream = options.Stream
 	if options.SequenceStart != nil {
 		configuration.sequenceStart = *options.SequenceStart
 	}
@@ -88,13 +93,25 @@ func sourceConfig(options *redSourceOptions) (redSourceConfig, error) {
 	if options.IntervalMS != nil {
 		configuration.intervalMS = *options.IntervalMS
 	}
+	maximum := maxRTPObservationLimit - 1 - configuration.trailers
+	if configuration.stream {
+		maximum = maxREDStressPackets
+	}
 	if configuration.tracks < 1 || configuration.tracks > 2 ||
 		configuration.packets < 1 || configuration.trailers < 0 || configuration.trailers > 2 ||
-		configuration.packets > maxRTPObservationLimit-1-configuration.trailers ||
-		configuration.tracks*(configuration.packets+configuration.trailers+1) > maxRTPObservationLimit ||
+		configuration.packets > maximum ||
+		(!configuration.stream && configuration.tracks*(configuration.packets+configuration.trailers+1) > maxRTPObservationLimit) ||
 		configuration.intervalMS < 0 || configuration.intervalMS > 1000 {
-		return redSourceConfig{}, fmt.Errorf("%w: require 1..2 tracks, at most 4096 total observations, 0..2 trailers, intervalMs 0..1000",
-			errInvalidREDControl)
+		return redSourceConfig{}, fmt.Errorf("%w: require 1..%d media packets, 1..2 tracks, bounded finite observations, 0..2 trailers, intervalMs 0..1000",
+			errInvalidREDControl, maximum)
+	}
+	if configuration.stream {
+		if configuration.tracks != 1 || len(options.PacketOverrides) != 0 {
+			return redSourceConfig{}, fmt.Errorf("%w: stress stream requires one track and no packet overrides", errInvalidREDControl)
+		}
+		// Constant 960-tick progression does not repeat source identities within
+		// 70,002 packets, so no full source identity map is needed for this run.
+		return configuration, nil
 	}
 	configuration.packetOverrides = make(map[int]redPacketOverride)
 	for _, override := range options.PacketOverrides {
@@ -166,6 +183,9 @@ func newRTPRecorder(
 		outboundDrop: make(map[int]bool),
 	}
 	if impairment != nil {
+		if configuration.stream {
+			return nil, fmt.Errorf("%w: stress stream does not support finite impairment controls", errInvalidREDControl)
+		}
 		if configuration.tracks > 1 {
 			return nil, fmt.Errorf("%w: multi-track sources do not accept packet impairment controls", errInvalidREDControl)
 		}
