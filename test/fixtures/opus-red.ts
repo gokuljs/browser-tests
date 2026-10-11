@@ -7,7 +7,7 @@ import { expect, type AudioCodecOrder, type Interop, type ObservedRTP } from "./
 export type Codecs = { opus: number; red: number };
 type Block = { payloadType: number; offset: number; payload: string };
 
-// Matrix validation requires Pion while unsupported browser directions skip.
+// Require Pion RED support while unsupported browser directions skip.
 // Strict mode also requires every browser direction used by the selected case.
 export async function requireRED(interop: Interop, skip: (condition: boolean, note?: string) => void,
   ...directions: ("Send" | "Receive")[]) {
@@ -188,4 +188,60 @@ export function wireLedger(packets: ObservedRTP[], codecs: Codecs, options: { so
   expect(depths.length, "actual wire RED carriers").toBeGreaterThan(5);
   expect(knownCopies, "useful verified redundancy").toBeGreaterThan(5);
   return { sources, primary, depths, copies: knownCopies, inferredCopies, padding };
+}
+
+// Predict per-carrier delivery across lifecycle loss, padding, and the receive window.
+export function expectedDeliveries(source: ObservedRTP[], carriers: ObservedRTP[], codecs: Codecs) {
+  const known = new Map(source.map(packet => [identity(packet), content(packet)]));
+  const positions = new Map<string, number>();
+  let previous = source[0]?.sequenceNumber ?? 0, extended = previous;
+  source.forEach((packet, index) => {
+    if (index) extended += (packet.sequenceNumber - previous + 0x8000 & 0xffff) - 0x8000;
+    previous = packet.sequenceNumber;
+    positions.set(identity(packet), extended);
+  });
+  const output: ObservedRTP[] = [], delivered = new Set<number>(), padding = new Set<number>();
+  let highest: number | undefined;
+  for (const carrier of carriers) {
+    if (carrier.padding && carrier.payload === "") {
+      const position = highest === undefined ? carrier.sequenceNumber : highest +
+        ((carrier.sequenceNumber - (highest & 0xffff) + 0x8000 & 0xffff) - 0x8000);
+      if (highest !== undefined && highest - position >= 64) continue;
+      if (highest !== undefined && position - highest >= 64) {
+        delivered.clear();
+        padding.clear();
+      }
+      padding.add(position);
+      delivered.add(position);
+      highest = Math.max(highest ?? position, position);
+      continue;
+    }
+    const primarySource = known.get(identity(carrier));
+    expect(primarySource, "carrier identity belongs to the stream").toBeDefined();
+    const position = positions.get(identity(carrier))!;
+    if (highest !== undefined && highest - position >= 64) continue;
+    if (highest !== undefined && position - highest >= 64) {
+      delivered.clear();
+      padding.clear();
+    }
+    const reference = Math.max(highest ?? position, position);
+    const decoded = carrier.payloadType === codecs.red ? decodeRED(carrier.payload) : {
+      redundant: [], primary: { payloadType: carrier.payloadType, payload: carrier.payload, offset: 0 },
+    };
+    expect(decoded.primary.payloadType).toBe(codecs.opus);
+    expect(decoded.primary.payload).toBe(primarySource!.payload);
+    for (const block of decoded.redundant) {
+      expect(block.payloadType).toBe(codecs.opus);
+      const timestamp = (carrier.timestamp - block.offset) >>> 0;
+      const candidates = source.filter(packet => packet.ssrc === carrier.ssrc && packet.timestamp === timestamp && packet.payload === block.payload);
+      expect(candidates, "copy resolves to exactly one stream identity").toHaveLength(1);
+      const copy = content(candidates[0]), copyPosition = positions.get(identity(copy))!;
+      if (block.offset === 0 || !block.payload || reference - copyPosition >= 64 ||
+          Array.from(padding).some(sequence => sequence >= copyPosition && sequence < position)) continue;
+      if (!delivered.has(copyPosition)) { output.push(copy); delivered.add(copyPosition); }
+    }
+    if (!delivered.has(position)) { output.push(primarySource!); delivered.add(position); }
+    highest = reference;
+  }
+  return output;
 }

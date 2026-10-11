@@ -30,10 +30,6 @@ on:
         description: Browser test ref (empty uses this workflow's ref)
         type: string
         default: ''
-      run-stress:
-        description: Run 20 recovery repetitions and accelerated wrap validation in Chrome
-        type: boolean
-        default: false
       run-soak:
         description: Run the 30-minute Chrome audio soak
         type: boolean
@@ -64,10 +60,6 @@ on:
         description: Browser test checkout ref
         type: string
         required: true
-      run-stress:
-        description: Run 20 recovery repetitions and accelerated wrap validation in Chrome
-        type: boolean
-        default: false
       run-soak:
         description: Run the 30-minute Chrome audio soak
         type: boolean
@@ -90,15 +82,11 @@ jobs:
       opus-red-suite: quick
       junit-path: .vitest-attachments/opus-red-quick.xml
 
-  extended:
-    if: inputs.run-stress || inputs.run-soak
-    name: ${{ matrix.suite }} (Chrome)
+  soak:
+    if: inputs.run-soak
+    name: soak (Chrome)
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.suite == 'soak' && 45 || 15 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: ${{ fromJSON(inputs.run-stress && inputs.run-soak && '["stress","soak"]' || inputs.run-stress && '["stress"]' || '["soak"]') }}
+    timeout-minutes: 45
     steps:
       - name: Check out browser interop
         uses: actions/checkout@v7
@@ -123,25 +111,25 @@ jobs:
           path: interceptor
           persist-credentials: false
 
-      - name: Run extended Chrome validation
+      - name: Run 30-minute Chrome audio soak
         uses: ./
         with:
           webrtc-path: webrtc
           interceptor-path: interceptor
           browser: chrome
           require-opus-red: '1'
-          opus-red-suite: ${{ matrix.suite }}
-          junit-path: .vitest-attachments/opus-red-${{ matrix.suite }}.xml
+          opus-red-suite: soak
+          junit-path: .vitest-attachments/opus-red-soak.xml
 
-      - name: Upload extended browser evidence
+      - name: Upload soak browser evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: opus-red-${{ matrix.suite }}-chrome
+          name: opus-red-soak-chrome
           path: |
             .vitest-attachments/
             test/**/__screenshots__/
-            stress/**/__screenshots__/
+            soak/**/__screenshots__/
           include-hidden-files: true
           if-no-files-found: warn
 

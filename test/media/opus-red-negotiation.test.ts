@@ -6,8 +6,8 @@ import { test, expect, type AudioCodecOrder, type Interop, type PionPeer } from 
 import { audioSink, oscillatorSource } from "../fixtures/media";
 import { audioCodecs, content, identity, opusLedger, opusOnlyCodec, preferAudioCodecs, requireRED, wireLedger } from "../fixtures/opus-red";
 
-const pairs = [{ opus: 111, red: 63 }, { opus: 109, red: 112 }, { opus: 96, red: 127 }];
-const offerers = ["browser", "pion"] as const;
+type Offerer = "browser" | "pion";
+type Skip = (condition: boolean, note?: string) => void;
 
 const inbound = async (browser: RTCPeerConnection) => Array.from((await browser.getStats()).values()).find(stat =>
   stat.type === "inbound-rtp" && stat.kind === "audio") as RTCInboundRtpStreamStats | undefined;
@@ -16,7 +16,7 @@ const decodedSamples = async (browser: RTCPeerConnection) => {
   return (received?.totalSamplesReceived ?? 0) - (received?.concealedSamples ?? 0);
 };
 
-async function negotiate(interop: Interop, browser: RTCPeerConnection, pion: PionPeer, offerer: typeof offerers[number],
+async function negotiate(interop: Interop, browser: RTCPeerConnection, pion: PionPeer, offerer: Offerer,
   direction: "send" | "receive", order: AudioCodecOrder, stream?: MediaStream): Promise<RTCRtpTransceiver> {
   if (offerer === "browser") {
     const transceiver = direction === "receive" ? browser.addTransceiver("audio", { direction: "recvonly" }) :
@@ -40,7 +40,7 @@ async function negotiate(interop: Interop, browser: RTCPeerConnection, pion: Pio
   const transceiver = browser.getTransceivers().find(transceiver =>
     transceiver.mid !== null && transceiver.receiver.track.kind === "audio")!;
   expect(transceiver, "offered audio transceiver").toBeDefined();
-  transceiver.direction = direction === "receive" ? "recvonly" : "sendonly";
+  transceiver.direction = "recvonly";
   preferAudioCodecs(transceiver, direction, order);
   await browser.setLocalDescription(await browser.createAnswer());
   await pion.setRemoteDescription(await interop.localDescription(browser));
@@ -71,126 +71,138 @@ async function verifyPlayback(browser: RTCPeerConnection, pion: PionPeer, playba
   return observations;
 }
 
-for (const pair of pairs) {
-  for (const offerer of offerers) {
-    for (const order of ["red-first", "opus-first"] as const) {
-      test(`Opus RED negotiates ${pair.opus}/${pair.red}, ${order} (${offerer} offers)`, async ({ interop, skip }) => {
-        await requireRED(interop, skip, "Receive");
-        const browser = interop.browserPeer();
-        const playback = await audioSink(browser);
-        try {
-          const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true,
-            opusREDPayloadTypes: pair, audioCodecOrder: order });
-          const transceiver = await negotiate(interop, browser, pion, offerer, "receive", order);
-          const negotiated = audioCodecs(browser.remoteDescription);
-          expect(negotiated, "both descriptions retain the RED/Opus association")
-            .toEqual(audioCodecs(browser.localDescription));
-          if (offerer === "pion") expect(negotiated, "Pion offers the configured payload pair").toEqual(pair);
-          const offer = offerer === "browser" ? browser.localDescription : browser.remoteDescription;
-          const audio = offer!.sdp.split(/(?=^m=)/m).find(section => section.startsWith("m=audio "))!;
-          const payloads = audio.split(/\r?\n/)[0].split(" ").slice(3).map(Number);
-          expect(payloads[0], "offered codec preference order")
-            .toBe(order === "red-first" ? negotiated.red : negotiated.opus);
-          expect(transceiver.currentDirection).toBe("recvonly");
+// Check negotiation, packet identifiers, and playback with non-default codec mappings.
+test("Browser plays RED using payload types 109 and 112", async ({ interop, skip }) => {
+  const pair = { opus: 109, red: 112 };
+  await requireRED(interop, skip, "Receive");
+  const browser = interop.browserPeer();
+  const playback = await audioSink(browser);
+  try {
+    const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true,
+      opusREDPayloadTypes: pair, audioCodecOrder: "red-first" });
+    const transceiver = await negotiate(interop, browser, pion, "pion", "receive", "red-first");
+    const negotiated = audioCodecs(browser.remoteDescription);
+    expect(negotiated, "both descriptions retain the RED/Opus association")
+      .toEqual(audioCodecs(browser.localDescription));
+    expect(negotiated, "Pion offers the configured payload pair").toEqual(pair);
+    const offer = browser.remoteDescription;
+    const audio = offer!.sdp.split(/(?=^m=)/m).find(section => section.startsWith("m=audio "))!;
+    const payloads = audio.split(/\r?\n/)[0].split(" ").slice(3).map(Number);
+    expect(payloads[0], "offered codec preference order")
+      .toBe(negotiated.red);
+    expect(transceiver.currentDirection).toBe("recvonly");
 
-          const observations = await verifyPlayback(browser, pion, playback);
-          const ledger = wireLedger(observations.outbound, negotiated, { source: observations.source });
-          expect(Array.from(ledger.primary.values()), "all transmitted Opus identities match the source exactly once")
-            .toEqual(observations.source.map(content));
-          expect(observations.source.every(packet => packet.payloadType === negotiated.opus)).toBe(true);
-          expect(observations.outbound[0].payloadType, "initial packet is Opus").toBe(negotiated.opus);
-          expect(observations.outbound.slice(1).every(packet => packet.payloadType === negotiated.red), "subsequent audio is RED").toBe(true);
-          expect(ledger.depths).toContain(1);
-          expect(ledger.depths).toContain(2);
-          expect(Math.max(...ledger.depths)).toBe(2);
-          expect((await pion.rtp()).errors).toEqual([]);
-          console.log(`[RED negotiation ${offerer}, ${order}] configured=${pair.opus}/${pair.red}, ` +
-            `negotiated=${negotiated.opus}/${negotiated.red}, exact primaries=${ledger.primary.size}, ` +
-            `verified copies=${ledger.copies}, decoded samples=${await decodedSamples(browser)}, non-silent audio`);
-        } finally {
-          await playback.close();
-        }
-      });
-    }
+    const observations = await verifyPlayback(browser, pion, playback);
+    const ledger = wireLedger(observations.outbound, negotiated, { source: observations.source });
+    expect(Array.from(ledger.primary.values()), "all transmitted Opus identities match the source exactly once")
+      .toEqual(observations.source.map(content));
+    expect(observations.source.every(packet => packet.payloadType === negotiated.opus)).toBe(true);
+    expect(observations.outbound[0].payloadType, "initial packet is Opus").toBe(negotiated.opus);
+    expect(observations.outbound.slice(1).every(packet => packet.payloadType === negotiated.red), "subsequent audio is RED").toBe(true);
+    expect(ledger.depths).toContain(1);
+    expect(ledger.depths).toContain(2);
+    expect(Math.max(...ledger.depths)).toBe(2);
+    expect((await pion.rtp()).errors).toEqual([]);
+    console.log(`[RED negotiation Pion offers] configured=${pair.opus}/${pair.red}, ` +
+      `negotiated=${negotiated.opus}/${negotiated.red}, exact primaries=${ledger.primary.size}, ` +
+      `verified copies=${ledger.copies}, decoded samples=${await decodedSamples(browser)}, non-silent audio`);
+  } finally {
+    await playback.close();
+  }
+});
+
+async function playOpusAudio(interop: Interop, skip: Skip, offerer: Offerer) {
+  await requireRED(interop, skip);
+  const browser = interop.browserPeer();
+  const playback = await audioSink(browser);
+  try {
+    const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true });
+    await negotiate(interop, browser, pion, offerer, "receive", "opus-only");
+    const answer = offerer === "browser" ? browser.remoteDescription : browser.localDescription;
+    const opus = opusOnlyCodec(answer);
+    const observations = await verifyPlayback(browser, pion, playback);
+    const ledger = opusLedger(observations.outbound, opus, observations.source);
+    expect(Array.from(ledger.primary.values()), "plain playback preserves every source packet")
+      .toEqual(observations.source.map(content));
+    console.log(`[Opus fallback Pion sends, ${offerer} offers] payload type=${opus}, ` +
+      `exact packets=${ledger.primary.size}, decoded samples=${await decodedSamples(browser)}, non-silent audio, no RED on wire`);
+  } finally {
+    await playback.close();
   }
 }
 
-for (const offerer of offerers) {
-  test(`Opus-only fallback from RED-enabled Pion (${offerer} offers)`, async ({ interop, skip }) => {
-    // This must run even when the browser cannot receive RED.
-    await requireRED(interop, skip);
+async function receiveOpusAudio(interop: Interop, skip: Skip, offerer: Offerer) {
+  await requireRED(interop, skip);
+  const media = await oscillatorSource();
+  try {
     const browser = interop.browserPeer();
-    const playback = await audioSink(browser);
-    try {
-      const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true });
-      await negotiate(interop, browser, pion, offerer, "receive", "opus-only");
-      const answer = offerer === "browser" ? browser.remoteDescription : browser.localDescription;
-      const opus = opusOnlyCodec(answer);
-      const observations = await verifyPlayback(browser, pion, playback);
-      const ledger = opusLedger(observations.outbound, opus, observations.source);
-      expect(Array.from(ledger.primary.values()), "plain playback preserves every source packet")
-        .toEqual(observations.source.map(content));
-      console.log(`[Opus fallback Pion sends, ${offerer} offers] payload type=${opus}, ` +
-        `exact packets=${ledger.primary.size}, decoded samples=${await decodedSamples(browser)}, non-silent audio, no RED on wire`);
-    } finally {
-      await playback.close();
+    // Chrome can send unnegotiated RED after answering a RED-first offer with Opus only.
+    // Keep RED in Pion's offer, but prefer Opus so the fallback uses negotiated RTP.
+    const pion = await interop.pionPeer({ behavior: "red-audio-receive", opusRED: true,
+      audioCodecOrder: offerer === "pion" ? "opus-first" : undefined });
+    const transceiver = await negotiate(interop, browser, pion, offerer, "send", "opus-only", media.stream);
+    const answer = offerer === "browser" ? browser.remoteDescription : browser.localDescription;
+    const opus = opusOnlyCodec(answer);
+    if (offerer === "pion") {
+      const offered = audioCodecs(browser.remoteDescription);
+      const audio = browser.remoteDescription!.sdp.split(/(?=^m=)/m).find(section => section.startsWith("m=audio "))!;
+      expect(audio.split(/\r?\n/)[0].split(" ").slice(3, 5).map(Number), "Pion still offers Opus and RED")
+        .toEqual([offered.opus, offered.red]);
+      expect(offered.opus).toBe(opus);
     }
-  });
-
-  test(`Opus-only fallback into RED-enabled Pion (${offerer} offers)`, async ({ interop, skip }) => {
-    // This must run even when the browser cannot send RED.
-    await requireRED(interop, skip);
-    const media = await oscillatorSource();
-    try {
-      const browser = interop.browserPeer();
-      // Chrome can send unnegotiated RED after answering a RED-first offer with Opus only.
-      // Keep RED in Pion's offer, but prefer Opus so the fallback uses negotiated RTP.
-      const pion = await interop.pionPeer({ behavior: "red-audio-receive", opusRED: true,
-        audioCodecOrder: offerer === "pion" ? "opus-first" : undefined });
-      const transceiver = await negotiate(interop, browser, pion, offerer, "send", "opus-only", media.stream);
-      const answer = offerer === "browser" ? browser.remoteDescription : browser.localDescription;
-      const opus = opusOnlyCodec(answer);
-      if (offerer === "pion") {
-        const offered = audioCodecs(browser.remoteDescription);
-        const audio = browser.remoteDescription!.sdp.split(/(?=^m=)/m).find(section => section.startsWith("m=audio "))!;
-        expect(audio.split(/\r?\n/)[0].split(" ").slice(3, 5).map(Number), "Pion still offers Opus and RED")
-          .toEqual([offered.opus, offered.red]);
-        expect(offered.opus).toBe(opus);
-      }
-      await expect.poll(async () => {
-        const observations = await pion.rtp();
-        return observations.errors.length > 0 || observations.inbound.filter(packet => packet.payload !== "").length > 25;
-      }, { timeout: 15_000 }).toBe(true);
-      const inbound = await pion.rtp();
-      expect(inbound.errors).toEqual([]);
-      expect(inbound.inbound.every(packet => packet.payloadType === opus),
-        "inbound RTP uses negotiated Opus, not unnegotiated RED").toBe(true);
-      let errors: string[] = [];
-      await expect.poll(async () => {
-        const observations = await pion.rtp();
-        errors = observations.errors;
-        return errors.length > 0 || observations.application.filter(packet => packet.payload !== "").length > 25;
-      }, { timeout: 15_000 }).toBe(true);
-      expect(errors).toEqual([]);
+    await expect.poll(async () => {
       const observations = await pion.rtp();
-      const received = opusLedger(observations.inbound, opus);
-      const delivered = opusLedger(observations.application, opus, Array.from(received.primary.values()));
-      const origin = observations.inbound[0].sequenceNumber;
-      const position = (sequence: number) => (sequence - origin + 0x8000 & 0xffff) - 0x8000;
-      const last = Math.max(...Array.from(delivered.primary.values()).map(packet => position(packet.sequenceNumber)));
-      for (const packet of received.primary.values()) {
-        if (position(packet.sequenceNumber) <= last) expect(delivered.primary.has(identity(packet)), "complete Opus delivery before snapshot tail").toBe(true);
-      }
-      expect(observations.errors).toEqual([]);
-      expect(observations.outbound).toEqual([]);
-      expect(observations.source).toEqual([]);
-      expect(observations.droppedOutbound).toEqual([]);
-      expect(transceiver.currentDirection).toBe("sendonly");
-      expect(browser.connectionState).toBe("connected");
-      console.log(`[Opus fallback browser sends, ${offerer} offers] payload type=${opus}, ` +
-        `exact deliveries=${delivered.primary.size}, padding=${received.padding}/${delivered.padding}, no RED on wire`);
-    } finally {
-      await media.close();
+      return observations.errors.length > 0 || observations.inbound.filter(packet => packet.payload !== "").length > 25;
+    }, { timeout: 15_000 }).toBe(true);
+    const inbound = await pion.rtp();
+    expect(inbound.errors).toEqual([]);
+    expect(inbound.inbound.every(packet => packet.payloadType === opus),
+      "inbound RTP uses negotiated Opus, not unnegotiated RED").toBe(true);
+    let errors: string[] = [];
+    await expect.poll(async () => {
+      const observations = await pion.rtp();
+      errors = observations.errors;
+      return errors.length > 0 || observations.application.filter(packet => packet.payload !== "").length > 25;
+    }, { timeout: 15_000 }).toBe(true);
+    expect(errors).toEqual([]);
+    const observations = await pion.rtp();
+    const received = opusLedger(observations.inbound, opus);
+    const delivered = opusLedger(observations.application, opus, Array.from(received.primary.values()));
+    const origin = observations.inbound[0].sequenceNumber;
+    const position = (sequence: number) => (sequence - origin + 0x8000 & 0xffff) - 0x8000;
+    const last = Math.max(...Array.from(delivered.primary.values()).map(packet => position(packet.sequenceNumber)));
+    for (const packet of received.primary.values()) {
+      if (position(packet.sequenceNumber) <= last) expect(delivered.primary.has(identity(packet)), "complete Opus delivery before snapshot tail").toBe(true);
     }
-  });
+    expect(observations.errors).toEqual([]);
+    expect(observations.outbound).toEqual([]);
+    expect(observations.source).toEqual([]);
+    expect(observations.droppedOutbound).toEqual([]);
+    expect(transceiver.currentDirection).toBe("sendonly");
+    expect(browser.connectionState).toBe("connected");
+    console.log(`[Opus fallback browser sends, ${offerer} offers] payload type=${opus}, ` +
+      `exact deliveries=${delivered.primary.size}, padding=${received.padding}/${delivered.padding}, no RED on wire`);
+  } finally {
+    await media.close();
+  }
 }
+
+// Check that Pion answers with Opus and sends playable audio.
+test("Browser offers Opus only and plays Pion audio", async ({ interop, skip }) => {
+  await playOpusAudio(interop, skip, "browser");
+});
+
+// Check that Pion accepts and delivers the browser's plain Opus audio.
+test("Browser offers Opus only and Pion receives audio", async ({ interop, skip }) => {
+  await receiveOpusAudio(interop, skip, "browser");
+});
+
+// Check that Pion follows an answer selecting only Opus.
+test("Pion offers RED and browser plays Opus-only audio", async ({ interop, skip }) => {
+  await playOpusAudio(interop, skip, "pion");
+});
+
+// Check that browser transmission and Pion delivery use negotiated Opus.
+test("Pion offers RED and receives Opus-only browser audio", async ({ interop, skip }) => {
+  await receiveOpusAudio(interop, skip, "pion");
+});

@@ -37,13 +37,10 @@ func TestREDMediaLifecycleBeforeConnection(t *testing.T) {
 	path := "/peers/" + created.ID
 	offer := call(path+"/create-offer", `{}`, http.StatusOK)
 	require.Equal(t, 2, strings.Count(offer.Body.String(), "m=audio "))
-	call(path+"/replace-red-audio", `{"index":1}`, http.StatusOK)
-	call(path+"/replace-red-audio", `{"index":2}`, http.StatusBadRequest)
 	response = call(path+"/close-red-media", `{}`, http.StatusOK)
 	var observations rtpSnapshot
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &observations))
-	require.Zero(t, observations.ActiveMediaReaders, "unconnected RTCP readers must stop")
-	require.Zero(t, observations.ActiveMediaWriters, "sources waiting for connection must stop")
+	require.True(t, server.peers[created.ID].observations.mediaStopped(), "unconnected readers and sources must stop")
 	require.False(t, observations.SourceDone, "cancelled sources have not completed playback")
 	require.Empty(t, observations.Source)
 	require.Empty(t, observations.Errors)

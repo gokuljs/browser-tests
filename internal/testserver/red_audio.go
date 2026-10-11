@@ -74,7 +74,7 @@ func redAudioSend(pc *webrtc.PeerConnection, observation *rtpRecorder) (func(web
 		return nil, err
 	}
 	var handlers []func(webrtc.PeerConnectionState)
-	for index := range observation.source.tracks {
+	for index := range observation.sourceTracks {
 		handler, setupErr := redAudioSendTrack(pc, observation, packets, index)
 		if setupErr != nil {
 			return nil, setupErr
@@ -90,10 +90,6 @@ func redAudioSend(pc *webrtc.PeerConnection, observation *rtpRecorder) (func(web
 }
 
 func redAudioSendTrack(pc *webrtc.PeerConnection, observation *rtpRecorder, packets [][]byte, trackIndex int) (func(webrtc.PeerConnectionState), error) {
-	configuration := observation.source
-	if configuration.packets == 0 {
-		configuration, _ = sourceConfig(nil)
-	}
 	track, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, fmt.Sprintf("tone-%d", trackIndex), "red-audio",
 	)
@@ -107,10 +103,6 @@ func redAudioSendTrack(pc *webrtc.PeerConnection, observation *rtpRecorder, pack
 		return nil, err
 	}
 	sender := transceiver.Sender()
-	audio := &redAudioTrack{track: track, sender: sender, toneOffset: trackIndex * redAudioPacketCount / 2}
-	observation.mu.Lock()
-	observation.audioSenders = append(observation.audioSenders, audio)
-	observation.mu.Unlock()
 	readerDone := observation.mediaReader()
 	go func() {
 		defer readerDone()
@@ -151,41 +143,25 @@ func redAudioSendTrack(pc *webrtc.PeerConnection, observation *rtpRecorder, pack
 
 			return
 		}
-		var tick <-chan time.Time
-		if configuration.intervalMS > 0 {
-			ticker := time.NewTicker(time.Duration(configuration.intervalMS) * time.Millisecond)
-			defer ticker.Stop()
-			tick = ticker.C
-		}
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
 		ssrc := uint32(parameters.Encodings[0].SSRC)
-		for index := range configuration.packets + configuration.trailers {
-			if tick == nil {
-				select {
-				case <-closed:
-					return
-				default:
-				}
-			} else {
-				select {
-				case <-closed:
-					return
-				case <-tick:
-				}
+		for index := range redAudioPacketCount {
+			select {
+			case <-closed:
+				return
+			case <-ticker.C:
 			}
 			packet := &rtp.Packet{
-				Header: configuration.header(index, opusPayloadType, ssrc),
+				Header: rtp.Header{
+					Version: 2, PayloadType: opusPayloadType, SSRC: ssrc,
+					SequenceNumber: uint16(1000 + index),      //nolint:gosec // Fixed 256-packet source.
+					Timestamp:      48000 + uint32(index)*960, //nolint:gosec // Fixed 20 ms progression.
+				},
+				Payload: packets[(index+trackIndex*redAudioPacketCount/2)%len(packets)],
 			}
-			if writeErr := audio.write(observation, packet, packets, index); writeErr != nil {
-				observation.recordError(writeErr)
-
-				return
-			}
-		}
-		if configuration.controlled {
-			// No audio copies are carried by this final padding-only packet. It is
-			// deliberately outside loss controls and absent from the source ledger.
-			sentinel := configuration.sentinel(opusPayloadType, ssrc)
-			if writeErr := audio.sentinel(&sentinel); writeErr != nil {
+			observation.record(&observation.observation.Source, &packet.Header, packet.Payload)
+			if writeErr := track.WriteRTP(packet); writeErr != nil {
 				observation.recordError(writeErr)
 
 				return
@@ -216,9 +192,6 @@ func redAudioReceive(pc *webrtc.PeerConnection, observation *rtpRecorder) error 
 		for {
 			packet, _, err := remote.ReadRTP()
 			if err != nil {
-				if observation.consumeInjectedError(err) {
-					continue
-				}
 				observation.recordError(err)
 
 				return

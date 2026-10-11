@@ -26,40 +26,19 @@ export type ObservedRTP = {
   payload: string;
   padding?: boolean;
   paddingSize?: number;
-  csrc?: number[];
-  extensions?: { id: number; payload: string }[];
-  headerSize?: number;
-  packetSize?: number;
 };
 
 export type RTPObservations = {
-  totals: Record<"source" | "outbound" | "inbound" | "inboundOriginal" | "application" | "droppedOutbound" | "inboundRED" | "outboundRED", number>;
-  summaries: { source: Record<string, RTPSummary>; application: Record<string, RTPSummary> };
-  activeMediaReaders: number; activeMediaWriters: number;
+  totals: Record<"outbound" | "inbound" | "application" | "inboundRED" | "outboundRED", number>;
   inbound: ObservedRTP[];
   outbound: ObservedRTP[];
   application: ObservedRTP[];
   source: ObservedRTP[];
   droppedOutbound: ObservedRTP[];
   errors: string[];
-  injectedErrors: string[];
   truncated: boolean;
   sourceDone: boolean;
-  drained: boolean;
-  inboundOriginal: ObservedRTP[];
-  inboundActions: { kind: "hold" | "release" | "duplicate" | "drop" | "mutate"; ordinal: number }[];
 };
-
-export type REDSourceOptions = {
-  stream?: boolean;
-  tracks?: number; packets?: number; trailers?: number; sequenceStart?: number; timestampStart?: number; intervalMs?: number;
-  packetOverrides?: { index: number; sequenceNumber?: number; timestamp?: number; payload?: string; opusFrames?: number;
-    csrc?: number[]; extensions?: { id: number; payload: string }[]; paddingSize?: number }[];
-};
-
-export type RTPSummary = { count: number; sha256: string; lastSequenceNumber: number; lastTimestamp: number };
-export type REDImpairmentOptions = { outboundDrop?: number[]; inboundOrder?: number[];
-  inboundPayloads?: { index: number; payload: string; expectedError: string }[] };
 
 export type AudioCodecOrder = "red-first" | "opus-first" | "opus-only";
 
@@ -93,7 +72,6 @@ export class PionPeer {
   createDataChannel(label: string, options: RTCDataChannelInit = {}): Promise<void> {
     return this.command("create-data-channel", { label, options });
   }
-  replaceAudioTrack(index = 0): Promise<void> { return this.command("replace-red-audio", { index }); }
   closeMedia(): Promise<RTPObservations> { return this.command("close-red-media"); }
   snapshot(): Promise<Snapshot> { return request(`/peers/${this.id}`); }
   stats(): Promise<Record<string, unknown>> { return request(`/peers/${this.id}/stats`); }
@@ -142,7 +120,7 @@ export class Interop {
 
   async pionPeer(options: { behavior?: string; configuration?: RTCConfiguration; certificateCount?: number; opusRED?: boolean; startWithRED?: boolean;
     opusREDPayloadTypes?: { opus: number; red: number }; audioCodecOrder?: AudioCodecOrder;
-    redSource?: REDSourceOptions; redImpairment?: REDImpairmentOptions; observationLimit?: number; redMaxPacketSize?: number } = {}): Promise<PionPeer> {
+    redSource?: { tracks?: number }; observationLimit?: number } = {}): Promise<PionPeer> {
     const { id, certificateFingerprints } = await request<{ id: string; certificateFingerprints?: string[] }>("/peers", "POST", options);
     const peer = new PionPeer(id, certificateFingerprints, options.opusRED);
     this.pions.push(peer);

@@ -16,7 +16,8 @@ const client = navigator as Navigator & { userAgentData?: {
 const versions = await client.userAgentData?.getHighEntropyValues(["fullVersionList"]).catch(() => undefined);
 console.log(`[Opus RED soak] browser=${navigator.userAgent}; versions=${versions?.fullVersionList?.map(value => `${value.brand}/${value.version}`).join(", ") ?? "unavailable"}`);
 
-test("Opus RED live audio soak (30 minutes)", { timeout: 31 * 60_000, retry: 0 }, async ({ interop, skip }) => {
+// Check continued audio in both directions throughout a long connection.
+test("RED audio keeps flowing for 30 minutes", { timeout: 31 * 60_000, retry: 0 }, async ({ interop, skip }) => {
   skip(import.meta.env.VITE_OPUS_RED_SOAK !== "1", "Set VITE_OPUS_RED_SOAK=1 to run the full 30-minute soak");
   await requireRED(interop, skip, "Send", "Receive");
   const media = await oscillatorSource();
