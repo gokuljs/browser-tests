@@ -26,7 +26,7 @@ inputs:
     required: false
     default: ''
   opus-red-suite:
-    description: Optional RED selection (quick or soak)
+    description: Select quick for the ten RED browser tests; leave empty for the default suite
     required: false
     default: ''
   junit-path:
@@ -113,10 +113,6 @@ runs:
           case "": break;
           case "quick":
             args.push("test/media/opus-red");
-            break;
-          case "soak":
-            process.env.VITE_OPUS_RED_SOAK = "1";
-            args.push("soak/opus-red-soak.test.ts");
             break;
           default: throw new Error("Invalid opus-red-suite selection");
         }

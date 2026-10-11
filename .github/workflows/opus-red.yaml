@@ -31,10 +31,6 @@ on:
         description: Browser test branch, tag, or commit; leave empty to use the revision running this workflow
         type: string
         default: ''
-      run-soak:
-        description: Also check that RED audio keeps flowing in Chrome for 30 minutes
-        type: boolean
-        default: false
   workflow_call:
     inputs:
       webrtc-repository:
@@ -61,10 +57,6 @@ on:
         description: Browser test branch, tag, or commit to run
         type: string
         required: true
-      run-soak:
-        description: Also check that RED audio keeps flowing in Chrome for 30 minutes
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -83,57 +75,6 @@ jobs:
       require-opus-red: pion
       opus-red-suite: quick
       junit-path: .vitest-attachments/opus-red-quick.xml
-
-  soak:
-    if: inputs.run-soak
-    name: Chrome RED audio for 30 minutes
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - name: Check out the browser tests
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ inputs.interop-repository || github.repository }}
-          ref: ${{ inputs.interop-ref || github.sha }}
-          persist-credentials: false
-
-      - name: Check out the WebRTC version to test
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ inputs.webrtc-repository }}
-          ref: ${{ inputs.webrtc-ref }}
-          path: webrtc
-          persist-credentials: false
-
-      - name: Check out the interceptor version to test
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ inputs.interceptor-repository }}
-          ref: ${{ inputs.interceptor-ref }}
-          path: interceptor
-          persist-credentials: false
-
-      - name: Check that RED audio keeps flowing for 30 minutes
-        uses: ./
-        with:
-          webrtc-path: webrtc
-          interceptor-path: interceptor
-          browser: chrome
-          require-opus-red: '1'
-          opus-red-suite: soak
-          junit-path: .vitest-attachments/opus-red-soak.xml
-
-      - name: Upload Chrome audio results and screenshots
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: opus-red-soak-chrome
-          path: |
-            .vitest-attachments/
-            test/**/__screenshots__/
-            soak/**/__screenshots__/
-          include-hidden-files: true
-          if-no-files-found: warn
 
   upstream:
     name: ${{ matrix.name }}

@@ -29,7 +29,6 @@ export type ObservedRTP = {
 };
 
 export type RTPObservations = {
-  totals: Record<"outbound" | "inbound" | "application" | "inboundRED" | "outboundRED", number>;
   inbound: ObservedRTP[];
   outbound: ObservedRTP[];
   application: ObservedRTP[];
