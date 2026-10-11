@@ -1,67 +1,68 @@
 # SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 # SPDX-License-Identifier: MIT
 
-name: Opus RED validation
+# Check RED audio in real browsers and verify the WebRTC and interceptor implementations.
+name: RED audio tests with Pion
 
 on:
   workflow_dispatch:
     inputs:
       webrtc-repository:
-        description: Repository containing WebRTC
+        description: WebRTC repository to test (owner/repository)
         type: string
         default: pion/webrtc
       webrtc-ref:
-        description: WebRTC checkout ref
+        description: WebRTC branch, tag, commit, or pull request ref to test
         type: string
         default: refs/pull/3526/head
       interceptor-repository:
-        description: Repository containing interceptor
+        description: Interceptor repository to test (owner/repository)
         type: string
         default: pion/interceptor
       interceptor-ref:
-        description: Interceptor checkout ref
+        description: Interceptor branch, tag, commit, or pull request ref to test
         type: string
         default: refs/pull/454/head
       interop-repository:
-        description: Browser test repository (empty uses this repository)
+        description: Browser test repository (owner/repository); leave empty to use this repository
         type: string
         default: ''
       interop-ref:
-        description: Browser test ref (empty uses this workflow's ref)
+        description: Browser test branch, tag, or commit; leave empty to use the revision running this workflow
         type: string
         default: ''
       run-soak:
-        description: Run the 30-minute Chrome audio soak
+        description: Also check that RED audio keeps flowing in Chrome for 30 minutes
         type: boolean
         default: false
   workflow_call:
     inputs:
       webrtc-repository:
-        description: Repository containing WebRTC
+        description: WebRTC repository to test (owner/repository)
         type: string
         default: pion/webrtc
       webrtc-ref:
-        description: WebRTC checkout ref
+        description: WebRTC branch, tag, commit, or pull request ref to test
         type: string
         default: refs/pull/3526/head
       interceptor-repository:
-        description: Repository containing interceptor
+        description: Interceptor repository to test (owner/repository)
         type: string
         default: pion/interceptor
       interceptor-ref:
-        description: Interceptor checkout ref
+        description: Interceptor branch, tag, commit, or pull request ref to test
         type: string
         default: refs/pull/454/head
       interop-repository:
-        description: Repository containing the browser tests
+        description: Browser test repository to run (owner/repository)
         type: string
         required: true
       interop-ref:
-        description: Browser test checkout ref
+        description: Browser test branch, tag, or commit to run
         type: string
         required: true
       run-soak:
-        description: Run the 30-minute Chrome audio soak
+        description: Also check that RED audio keeps flowing in Chrome for 30 minutes
         type: boolean
         default: false
 
@@ -70,6 +71,7 @@ permissions:
 
 jobs:
   quick:
+    name: 10 quick RED browser tests
     uses: ./.github/workflows/browser-tests.yaml
     with:
       webrtc-repository: ${{ inputs.webrtc-repository }}
@@ -84,18 +86,18 @@ jobs:
 
   soak:
     if: inputs.run-soak
-    name: soak (Chrome)
+    name: Chrome RED audio for 30 minutes
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Check out browser interop
+      - name: Check out the browser tests
         uses: actions/checkout@v7
         with:
           repository: ${{ inputs.interop-repository || github.repository }}
           ref: ${{ inputs.interop-ref || github.sha }}
           persist-credentials: false
 
-      - name: Check out WebRTC
+      - name: Check out the WebRTC version to test
         uses: actions/checkout@v7
         with:
           repository: ${{ inputs.webrtc-repository }}
@@ -103,7 +105,7 @@ jobs:
           path: webrtc
           persist-credentials: false
 
-      - name: Check out interceptor
+      - name: Check out the interceptor version to test
         uses: actions/checkout@v7
         with:
           repository: ${{ inputs.interceptor-repository }}
@@ -111,7 +113,7 @@ jobs:
           path: interceptor
           persist-credentials: false
 
-      - name: Run 30-minute Chrome audio soak
+      - name: Check that RED audio keeps flowing for 30 minutes
         uses: ./
         with:
           webrtc-path: webrtc
@@ -121,7 +123,7 @@ jobs:
           opus-red-suite: soak
           junit-path: .vitest-attachments/opus-red-soak.xml
 
-      - name: Upload soak browser evidence
+      - name: Upload Chrome audio results and screenshots
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -134,25 +136,33 @@ jobs:
           if-no-files-found: warn
 
   upstream:
-    name: Upstream Go (${{ matrix.check }})
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        check: [targeted, full, race, fuzz]
+        include:
+          - check: targeted
+            name: Go RED codec and recovery tests
+          - check: full
+            name: All WebRTC and interceptor Go tests
+          - check: race
+            name: Go RED tests with race detection
+          - check: fuzz
+            name: Fuzz interceptor RED packet parsing
     env:
       GOTOOLCHAIN: auto
       RED_GO_CHECK: ${{ matrix.check }}
     steps:
-      - name: Check out browser interop
+      - name: Check out the browser tests
         uses: actions/checkout@v7
         with:
           repository: ${{ inputs.interop-repository || github.repository }}
           ref: ${{ inputs.interop-ref || github.sha }}
           persist-credentials: false
 
-      - name: Check out WebRTC
+      - name: Check out the WebRTC version to test
         uses: actions/checkout@v7
         with:
           repository: ${{ inputs.webrtc-repository }}
@@ -160,7 +170,7 @@ jobs:
           path: webrtc
           persist-credentials: false
 
-      - name: Check out interceptor
+      - name: Check out the interceptor version to test
         uses: actions/checkout@v7
         with:
           repository: ${{ inputs.interceptor-repository }}
@@ -174,7 +184,7 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Prepare temporary Go workspace
+      - name: Prepare a Go workspace for the selected checkouts
         id: workspace
         shell: bash
         env:
@@ -190,7 +200,7 @@ jobs:
           git -C webrtc rev-parse HEAD
           git -C interceptor rev-parse HEAD
 
-      - name: Test WebRTC
+      - name: Run WebRTC Go tests
         if: matrix.check != 'fuzz'
         shell: bash
         run: |
@@ -201,7 +211,7 @@ jobs:
           esac
           go -C webrtc test "${args[@]}" 2>&1 | tee ".vitest-attachments/upstream-$RED_GO_CHECK-webrtc.log"
 
-      - name: Test interceptor
+      - name: Run interceptor Go checks
         if: always() && steps.workspace.outcome == 'success'
         shell: bash
         run: |
@@ -213,7 +223,7 @@ jobs:
           esac
           go -C interceptor test "${args[@]}" 2>&1 | tee ".vitest-attachments/upstream-$RED_GO_CHECK-interceptor.log"
 
-      - name: Upload upstream evidence
+      - name: Upload Go logs and fuzz inputs
         if: always()
         uses: actions/upload-artifact@v7
         with:
