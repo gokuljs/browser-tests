@@ -71,24 +71,7 @@ interceptor checkout or ref. `PION_INTERCEPTOR_REPOSITORY` selects its repositor
 
 ## RED browser tests
 
-The RED suite contains ten quick cases and one optional 30-minute soak. Other
-browser interoperability tests remain part of the default suite.
-
-| Test name | Purpose |
-| --- | --- |
-| RED audio works both ways when Pion offers | Check browser RED transmission, exact Pion delivery and echo, and audible browser playback. |
-| Browser plays audio when Pion starts with RED | Check that playback starts when the first arriving audio packet is RED. |
-| Browser plays RED using payload types 109 and 112 | Check negotiation, packet identifiers, and playback with non-default codec mappings. |
-| Browser offers Opus only and plays Pion audio | Check that Pion answers with Opus and sends playable audio. |
-| Browser offers Opus only and Pion receives audio | Check that Pion accepts and delivers the browser's plain Opus audio. |
-| Pion offers RED and browser plays Opus-only audio | Check that Pion follows an answer selecting only Opus. |
-| Pion offers RED and receives Opus-only browser audio | Check that browser transmission and Pion delivery use negotiated Opus. |
-| Pion keeps two browser RED audio streams separate | Check separate stream identities and correct audio delivery for two browser tracks. |
-| Browser plays two separate Pion RED audio streams | Check separate packet histories and audible playback on both browser tracks. |
-| RED audio, video, and data survive renegotiation and ICE restart | Check that fresh media and data continue after both connection changes. |
-| Optional: RED audio keeps flowing for 30 minutes | Check continued audio in both directions throughout a long connection. |
-
-Run the ten quick cases against RED-enabled WebRTC and interceptor checkouts:
+Run the ten quick cases using RED-enabled WebRTC and interceptor checkouts:
 
 ```sh
 VITE_REQUIRE_OPUS_RED=pion npm run test:chrome -- \
@@ -96,28 +79,13 @@ VITE_REQUIRE_OPUS_RED=pion npm run test:chrome -- \
   test/media/opus-red --browser.fileParallelism=false --retry=0
 ```
 
-Select another browser with its `test:*` command. The runner detects Pion's RED
-API and enables the test-server adapter automatically. With the default
-requirement mode, unsupported Pion or browser RED capabilities skip with an
-explicit reason. `VITE_REQUIRE_OPUS_RED=pion` requires Pion RED while unsupported
-browser send or receive directions still skip; `VITE_REQUIRE_OPUS_RED=1` requires
-every RED direction used by each selected case.
-
-The RED-first startup case checks playable audio after RED arrives first. It does
-not verify exact recovery of the suppressed first audio frame.
-
-The soak is excluded unless explicitly enabled and always measures the full
-30 minutes:
+Run the optional 30-minute soak:
 
 ```sh
 VITE_OPUS_RED_SOAK=1 VITE_REQUIRE_OPUS_RED=1 npm run test:chrome -- \
   --webrtc /path/to/webrtc --interceptor /path/to/interceptor \
   soak/opus-red-soak.test.ts --browser.fileParallelism=false --retry=0
 ```
-
-The CI action accepts `opus-red-suite: quick` or `opus-red-suite: soak`; leaving
-it empty runs the default suite. The RED validation workflow runs quick cases
-across its browser matrix and runs the Chrome soak only when `run-soak` is set.
 
 ## Development
 
