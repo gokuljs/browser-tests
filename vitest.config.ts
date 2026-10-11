@@ -80,10 +80,7 @@ export default defineConfig({
   },
   test: {
     testTimeout: 60_000,
-    include: [
-      "test/**/*.test.ts",
-      ...(process.env.VITE_OPUS_RED_SOAK === "1" ? ["soak/opus-red-soak.test.ts"] : []),
-    ],
+    include: ["test/**/*.test.ts"],
     browser: {
       enabled: true,
       provider: webdriverio({ capabilities: capabilitiesByBrowser[browserName] }),

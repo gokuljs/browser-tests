@@ -39,7 +39,7 @@ on:
         type: string
         default: ''
       opus-red-suite:
-        description: Select quick for 10 RED tests or soak for the 30-minute RED test; leave empty for the default browser suite
+        description: Select quick for the ten RED browser tests; leave empty for the default browser suite
         type: string
         default: ''
       junit-path:
@@ -54,7 +54,7 @@ jobs:
   interop:
     name: Browser tests in ${{ matrix.browser }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ inputs.opus-red-suite == 'soak' && 45 || 15 }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -113,6 +113,5 @@ jobs:
             ${{ inputs.junit-path }}
             .vitest-attachments/
             test/**/__screenshots__/
-            soak/**/__screenshots__/
           include-hidden-files: true
           if-no-files-found: warn

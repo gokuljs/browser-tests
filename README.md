@@ -79,14 +79,6 @@ VITE_REQUIRE_OPUS_RED=pion npm run test:chrome -- \
   test/media/opus-red --browser.fileParallelism=false --retry=0
 ```
 
-Run the optional 30-minute soak:
-
-```sh
-VITE_OPUS_RED_SOAK=1 VITE_REQUIRE_OPUS_RED=1 npm run test:chrome -- \
-  --webrtc /path/to/webrtc --interceptor /path/to/interceptor \
-  soak/opus-red-soak.test.ts --browser.fileParallelism=false --retry=0
-```
-
 ## Development
 
 Browser tests live in [test/](test/). Shared fixtures in

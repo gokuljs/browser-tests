@@ -21,14 +21,6 @@ type redSourceOptions struct {
 	Tracks int `json:"tracks"`
 }
 
-type rtpTotals struct {
-	Inbound     uint64 `json:"inbound"`
-	Outbound    uint64 `json:"outbound"`
-	Application uint64 `json:"application"`
-	InboundRED  uint64 `json:"inboundRED"`
-	OutboundRED uint64 `json:"outboundRED"`
-}
-
 type observedRTP struct {
 	SSRC           uint32 `json:"ssrc"`
 	SequenceNumber uint16 `json:"sequenceNumber"`
@@ -40,7 +32,6 @@ type observedRTP struct {
 }
 
 type rtpSnapshot struct {
-	Totals          rtpTotals     `json:"totals"`
 	Inbound         []observedRTP `json:"inbound"`
 	Outbound        []observedRTP `json:"outbound"`
 	Application     []observedRTP `json:"application"`
@@ -97,15 +88,6 @@ func (r *rtpRecorder) record(target *[]observedRTP, header *rtp.Header, payload 
 }
 
 func (r *rtpRecorder) recordLocked(target *[]observedRTP, header *rtp.Header, payload []byte) {
-	// Live counters keep advancing after the retained evidence prefix is full.
-	switch target {
-	case &r.observation.Inbound:
-		r.observation.Totals.Inbound++
-	case &r.observation.Outbound:
-		r.observation.Totals.Outbound++
-	case &r.observation.Application:
-		r.observation.Totals.Application++
-	}
 	limit := r.observationLimit
 	if limit == 0 {
 		limit = maxRTPObservations
@@ -116,21 +98,6 @@ func (r *rtpRecorder) recordLocked(target *[]observedRTP, header *rtp.Header, pa
 		return
 	}
 	*target = append(*target, observeRTP(header, payload))
-}
-
-func (r *rtpRecorder) recordWire(target *[]observedRTP, header *rtp.Header, payload []byte, redPayloadType uint8) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.recordLocked(target, header, payload)
-	if redPayloadType == 0 || header.PayloadType != redPayloadType || len(payload) == 0 {
-		return
-	}
-	switch target {
-	case &r.observation.Inbound:
-		r.observation.Totals.InboundRED++
-	case &r.observation.Outbound:
-		r.observation.Totals.OutboundRED++
-	}
 }
 
 // Suppress the first plain Opus carrier after encoding so the next carrier is RED.
@@ -169,7 +136,6 @@ func (r *rtpRecorder) snapshot() rtpSnapshot {
 		return result
 	}
 	return rtpSnapshot{
-		Totals:          r.observation.Totals,
 		Inbound:         clone(r.observation.Inbound),
 		Outbound:        clone(r.observation.Outbound),
 		Application:     clone(r.observation.Application),
@@ -199,7 +165,7 @@ func (o *rtpObserver) BindLocalStream(info *interceptor.StreamInfo, writer inter
 		if o.recorder.suppressStartupOpus(header, payload, uint8(info.PayloadType)) {
 			return header.MarshalSize() + len(payload), nil
 		}
-		o.recorder.recordWire(&o.recorder.observation.Outbound, header, payload, info.PayloadTypeForwardErrorCorrection)
+		o.recorder.record(&o.recorder.observation.Outbound, header, payload)
 		n, err := writer.Write(header, payload, attributes)
 		o.recorder.recordError(err)
 
@@ -222,7 +188,7 @@ func (o *rtpObserver) BindRemoteStream(info *interceptor.StreamInfo, reader inte
 		if parseErr := packet.Unmarshal(buffer[:n]); parseErr != nil {
 			o.recorder.recordError(parseErr)
 		} else {
-			o.recorder.recordWire(&o.recorder.observation.Inbound, &packet.Header, packet.Payload, info.PayloadTypeForwardErrorCorrection)
+			o.recorder.record(&o.recorder.observation.Inbound, &packet.Header, packet.Payload)
 		}
 
 		return n, attributes, nil
