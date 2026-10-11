@@ -35,7 +35,7 @@ on:
         type: string
         default: ''
       opus-red-suite:
-        description: Optional RED selection (quick, stress, or soak)
+        description: Optional RED selection (quick or soak)
         type: string
         default: ''
       junit-path:
@@ -109,6 +109,6 @@ jobs:
             ${{ inputs.junit-path }}
             .vitest-attachments/
             test/**/__screenshots__/
-            stress/**/__screenshots__/
+            soak/**/__screenshots__/
           include-hidden-files: true
           if-no-files-found: warn

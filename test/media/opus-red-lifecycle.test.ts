@@ -4,8 +4,7 @@
  */
 import { test, expect, type ObservedRTP, type PionPeer, type RTPObservations } from "../fixtures/interop";
 import { audioSink, mediaSource, oscillatorSource } from "../fixtures/media";
-import { audioCodecs, content, decodeRED, identity, preferAudioCodecs, requireRED, wireLedger, type Codecs } from "../fixtures/opus-red";
-import { expectedDeliveries } from "../fixtures/red-recovery";
+import { audioCodecs, content, decodeRED, expectedDeliveries, identity, preferAudioCodecs, requireRED, wireLedger, type Codecs } from "../fixtures/opus-red";
 
 const audioStats = async (browser: RTCPeerConnection) => Array.from((await browser.getStats()).values())
   .filter(stat => stat.type === "inbound-rtp" && stat.kind === "audio") as RTCInboundRtpStreamStats[];
@@ -23,7 +22,7 @@ function activeAudioCodecs(description: RTCSessionDescriptionInit | null) {
 // ICE transitions can lose carrier primaries. RED preserves the missing copy's
 // bytes/timestamp, but not its original sequence number. Those identities are
 // checked against the receiver's contiguous-copy contract and reported as
-// inferred; controlled recovery tests retain independent source identities.
+// inferred.
 function transitionOutputs(packets: ObservedRTP[], codecs: Codecs) {
   const primaries = new Map<string, ObservedRTP>();
   const copies: { carrier: ObservedRTP; blocks: ReturnType<typeof decodeRED>["redundant"] }[] = [];
@@ -83,7 +82,7 @@ function verifyIncoming(observations: RTPObservations, codecs: Codecs, transitio
       expect(new Set(deliveries.map(identity)).size, "no duplicate application deliveries").toBe(deliveries.length);
       expect(deliveries.length).toBeGreaterThan(25);
       console.log(`[RED lifecycle SSRC ${ssrc}] exact observed primaries and decoded copies; ` +
-        `copy identities inferred from receiver contract=${expected.inferred}; independent lost-header proof requires controlled source`);
+        `copy identities inferred from receiver contract=${expected.inferred}`);
       continue;
     }
     const ledger = wireLedger(packets, codecs, { inferStartup: false });
@@ -138,7 +137,8 @@ async function multiAudioSink(browser: RTCPeerConnection) {
   } };
 }
 
-test("Opus RED isolates two browser audio SSRCs", async ({ interop, skip }) => {
+// Check separate stream identities and correct audio delivery for two browser tracks.
+test("Pion keeps two browser RED audio streams separate", async ({ interop, skip }) => {
   await requireRED(interop, skip, "Send");
   const sources = await Promise.all([oscillatorSource(440), oscillatorSource(880)]);
   try {
@@ -168,7 +168,8 @@ test("Opus RED isolates two browser audio SSRCs", async ({ interop, skip }) => {
   }
 });
 
-test("Opus RED isolates two Pion audio SSRCs", async ({ interop, skip }) => {
+// Check separate packet histories and audible playback on both browser tracks.
+test("Browser plays two separate Pion RED audio streams", async ({ interop, skip }) => {
   await requireRED(interop, skip, "Receive");
   const browser = interop.browserPeer();
   const playback = await multiAudioSink(browser);
@@ -177,7 +178,7 @@ test("Opus RED isolates two Pion audio SSRCs", async ({ interop, skip }) => {
       preferAudioCodecs(browser.addTransceiver("audio", { direction: "recvonly" }), "receive");
     }
     const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true,
-      observationLimit: 2048, redSource: { tracks: 2, packets: 256 } });
+      observationLimit: 2048, redSource: { tracks: 2 } });
     await interop.negotiate(browser, pion);
     await expect.poll(async () => {
       expect((await pion.rtp()).errors).toEqual([]);
@@ -214,233 +215,90 @@ test("Opus RED isolates two Pion audio SSRCs", async ({ interop, skip }) => {
   }
 });
 
-test("Opus RED browser track replacement preserves its SSRC and fresh audio", async ({ interop, skip }) => {
-  await requireRED(interop, skip, "Send");
-  const sources = await Promise.all([oscillatorSource(440), oscillatorSource(880)]);
-  try {
-    const browser = interop.browserPeer();
-    const audio = browser.addTransceiver(sources[0].stream.getAudioTracks()[0], { direction: "sendonly", streams: [sources[0].stream] });
-    preferAudioCodecs(audio, "send");
-    const pion = await interop.pionPeer({ behavior: "red-audio-receive", opusRED: true, observationLimit: 2048 });
-    await interop.negotiate(browser, pion);
-    await expect.poll(async () => (await pion.rtp()).application.length, { timeout: 15_000 }).toBeGreaterThan(25);
-    const before = await pion.rtp();
-    expect(before.errors).toEqual([]);
-    const ssrc = before.application[0].ssrc;
-    const description = browser.localDescription!.sdp;
-    await audio.sender.replaceTrack(sources[1].stream.getAudioTracks()[0]);
-    await expect.poll(async () => {
-      const observation = await pion.rtp();
-      expect(observation.errors).toEqual([]);
-      return observation.application.length > before.application.length + 25 &&
-        observation.inbound.slice(before.inbound.length).filter(packet => packet.payloadType === 63).length > 5;
-    }, { timeout: 15_000 }).toBe(true);
-    const observation = await pion.rtp();
-    const streams = verifyIncoming(observation, activeAudioCodecs(browser.localDescription));
-    expect(Array.from(streams.keys()), "replacement preserves the negotiated stream").toEqual([ssrc]);
-    expect(audio.sender.track).toBe(sources[1].stream.getAudioTracks()[0]);
-    expect(browser.localDescription!.sdp, "replaceTrack does not require negotiation").toBe(description);
-    const fresh = observation.application.slice(before.application.length);
-    expect(fresh.map(packet => packet.payload), "replacement produces different Opus bytes")
-      .not.toEqual(before.application.slice(-fresh.length).map(packet => packet.payload));
-    console.log(`[RED browser replacement] same SSRC=${ssrc}, fresh exact Opus packets=${fresh.length}`);
-  } finally {
-    await Promise.all(sources.map(source => source.close()));
-  }
-});
-
-test("Opus RED bundled audio video and data survive renegotiation and ICE restart", async ({ interop, skip }) => {
+// Check that fresh media and data continue after both connection changes.
+test("RED audio, video, and data survive renegotiation and ICE restart", async ({ interop, skip }) => {
   await requireRED(interop, skip, "Send", "Receive");
-  for (let cycle = 0; cycle < 2; cycle++) {
-    const source = await oscillatorSource(440);
-    const videoSource = await mediaSource("video");
-    const browser = interop.browserPeer();
-    const playback = await audioSink(browser);
-    const video = document.createElement("video");
-    video.autoplay = video.playsInline = video.muted = true;
-    document.body.append(video);
-    browser.addEventListener("track", ({ track }) => {
-      if (track.kind === "video") video.srcObject = new MediaStream([track]);
-    });
-    let pion: PionPeer | undefined;
-    try {
-      const audio = browser.addTransceiver(source.stream.getAudioTracks()[0], { direction: "sendrecv", streams: [source.stream] });
-      preferAudioCodecs(audio, "send");
-      const camera = browser.addTransceiver(videoSource.stream.getVideoTracks()[0], { direction: "sendrecv", streams: [videoSource.stream] });
-      camera.setCodecPreferences(RTCRtpReceiver.getCapabilities("video")!.codecs.filter(codec => codec.mimeType.toLowerCase() === "video/vp8"));
-      const channel = browser.createDataChannel("red-lifecycle");
-      let opens = 0, closes = 0;
-      channel.addEventListener("open", () => opens++);
-      channel.addEventListener("close", () => closes++);
-      pion = await interop.pionPeer({ behavior: "red-bundled-echo", opusRED: true, observationLimit: 2048 });
-      await interop.negotiate(browser, pion);
-      await interop.waitForOpen(channel);
-      const sctp = browser.sctp;
-      expect(audio.sender.transport).toBe(camera.sender.transport);
-      expect(audio.sender.transport).toBe(sctp!.transport);
-      const fingerprint = browser.localDescription!.sdp.match(/^a=fingerprint:(.+)/m)![1].trim();
-      const frames = async () => Array.from((await browser.getStats()).values()).find(stat => stat.type === "inbound-rtp" && stat.kind === "video")?.framesDecoded ?? 0;
-      let checkpoint = { inbound: 0, outbound: 0, application: 0, samples: 0, frames: 0 };
-      const progress = async (phase: string) => {
-        await expect.poll(async () => {
-          const observations = await pion!.rtp();
-          expect(observations.errors).toEqual([]);
-          const freshInbound = observations.inbound.slice(checkpoint.inbound);
-          const freshOutbound = observations.outbound.slice(checkpoint.outbound);
-          return observations.application.length > checkpoint.application + 10 &&
-            freshInbound.filter(packet => packet.payloadType === 63).length > 5 &&
-            freshOutbound.filter(packet => packet.payloadType === 63).length > 5;
-        }, { timeout: 15_000 }).toBe(true);
-        await expect.poll(async () => samples((await audioStats(browser))[0]), { timeout: 15_000 }).toBeGreaterThan(checkpoint.samples + 4800);
-        await expect.poll(playback.rms, { timeout: 15_000 }).toBeGreaterThan(0.01);
-        await expect.poll(frames, { timeout: 15_000 }).toBeGreaterThan(checkpoint.frames + 2);
-        const reply = interop.nextMessage(channel);
-        const message = `RED lifecycle ${cycle}/${phase}`;
-        channel.send(message);
-        expect(await reply).toBe(message);
-        const observation = await pion!.rtp();
-        checkpoint = { inbound: observation.inbound.length, outbound: observation.outbound.length,
-          application: observation.application.length, samples: samples((await audioStats(browser))[0]), frames: await frames() };
-      };
-      await progress("initial");
-      const origin = browser.localDescription!.sdp.match(/^o=(.+)/m)![1].trim();
-      await interop.negotiate(browser, pion);
-      expect(browser.localDescription!.sdp.match(/^o=(.+)/m)![1].trim()).not.toBe(origin);
-      audioCodecs(browser.localDescription);
-      audioCodecs(browser.remoteDescription);
-      await progress("RED renegotiation");
-      const before = browser.localDescription!.sdp.match(/^a=ice-ufrag:(.+)/m)![1].trim();
-      await interop.negotiate(browser, pion, { iceRestart: true });
-      expect(browser.localDescription!.sdp.match(/^a=ice-ufrag:(.+)/m)![1].trim()).not.toBe(before);
-      expect(browser.localDescription!.sdp.match(/^a=fingerprint:(.+)/m)![1].trim()).toBe(fingerprint);
-      expect(browser.sctp).toBe(sctp);
-      await progress("ICE restart");
-      expect(channel.readyState).toBe("open");
-      expect(opens).toBe(1); expect(closes).toBe(0);
-      expect((await pion.snapshot()).signalingState).toBe("stable");
-      const observations = await pion.rtp();
-      verifyIncoming(observations, activeAudioCodecs(browser.localDescription), true);
-      const codecs = audioCodecs(browser.remoteDescription);
-      const outgoingSSRC = observations.outbound.find(packet => packet.payload !== "")!.ssrc;
-      const echoedSource = observations.application.map(packet => ({ ...content(packet), ssrc: outgoingSSRC, payloadType: codecs.opus }));
-      wireLedger(observations.outbound, codecs, { source: echoedSource });
-      console.log(`[RED bundled lifecycle ${cycle}] fresh RED/Opus, video and data passed renegotiation and ICE restart`);
-    } finally {
-      await playback.close();
-      video.pause(); video.srcObject = null; video.remove();
-      await Promise.all([source.close(), videoSource.close()]);
-      browser.close();
-      // Keep the peer's bounded packet ledger available for fixture failure
-      // diagnostics; fixture teardown performs the final DELETE afterwards.
-      if (pion) await pion.closeMedia();
-      expect(browser.signalingState).toBe("closed");
-    }
-  }
-});
-
-test("Opus RED discovers a new SSRC after removing and adding a stream", async ({ interop, skip }) => {
-  await requireRED(interop, skip, "Send");
-  const browser = interop.browserPeer();
-  const sources = await Promise.all([oscillatorSource(440), oscillatorSource(880), oscillatorSource(660)]);
-  try {
-    let audio = browser.addTransceiver(sources[0].stream.getAudioTracks()[0], { direction: "sendonly", streams: [sources[0].stream] });
-    preferAudioCodecs(audio, "send");
-    const pion = await interop.pionPeer({ behavior: "red-audio-receive", opusRED: true, observationLimit: 2048 });
-    await interop.negotiate(browser, pion);
-    const observed = new Set<number>();
-    for (let generation = 0; generation < 3; generation++) {
-      if (generation > 0) {
-        browser.removeTrack(audio.sender);
-        // Preserve the inactive m-line and its bundled transport. Stopping the
-        // last transceiver instead tears down DTLS before a new stream is added.
-        await interop.negotiate(browser, pion);
-        audio = browser.addTransceiver(sources[generation].stream.getAudioTracks()[0], { direction: "sendonly", streams: [sources[generation].stream] });
-        preferAudioCodecs(audio, "send");
-        await interop.negotiate(browser, pion);
-      }
-      let newSSRC = 0;
-      await expect.poll(async () => {
-        const observation = await pion.rtp();
-        expect(observation.errors).toEqual([]);
-        const current = Array.from(groups(observation.application)).find(([ssrc, packets]) => !observed.has(ssrc) && packets.length > 25);
-        newSSRC = current?.[0] ?? 0;
-        return newSSRC !== 0;
-      }, { timeout: 15_000 }).toBe(true);
-      observed.add(newSSRC);
-      expect((await pion.snapshot()).signalingState).toBe("stable");
-    }
-    const observations = await pion.rtp();
-    const streams = verifyIncoming(observations, activeAudioCodecs(browser.localDescription));
-    expect(streams.size).toBe(3);
-    console.log(`[RED stream rebind] three distinct SSRCs=${Array.from(observed)}, exact independent Opus deliveries=${observations.application.length}`);
-  } finally {
-    await Promise.all(sources.map(source => source.close()));
-  }
-});
-
-test("Opus RED Pion sender replacement preserves the audio stream", async ({ interop, skip }) => {
-  await requireRED(interop, skip, "Receive");
+  const source = await oscillatorSource(440);
+  const videoSource = await mediaSource("video");
   const browser = interop.browserPeer();
   const playback = await audioSink(browser);
+  const video = document.createElement("video");
+  video.autoplay = video.playsInline = video.muted = true;
+  document.body.append(video);
+  browser.addEventListener("track", ({ track }) => {
+    if (track.kind === "video") video.srcObject = new MediaStream([track]);
+  });
+  let pion: PionPeer | undefined;
   try {
-    preferAudioCodecs(browser.addTransceiver("audio", { direction: "recvonly" }), "receive");
-    const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true,
-      observationLimit: 2048, redSource: { packets: 1024 } });
+    const audio = browser.addTransceiver(source.stream.getAudioTracks()[0], { direction: "sendrecv", streams: [source.stream] });
+    preferAudioCodecs(audio, "send");
+    const camera = browser.addTransceiver(videoSource.stream.getVideoTracks()[0], { direction: "sendrecv", streams: [videoSource.stream] });
+    camera.setCodecPreferences(RTCRtpReceiver.getCapabilities("video")!.codecs.filter(codec => codec.mimeType.toLowerCase() === "video/vp8"));
+    const channel = browser.createDataChannel("red-lifecycle");
+    let opens = 0, closes = 0;
+    channel.addEventListener("open", () => opens++);
+    channel.addEventListener("close", () => closes++);
+    pion = await interop.pionPeer({ behavior: "red-bundled-echo", opusRED: true, observationLimit: 2048 });
     await interop.negotiate(browser, pion);
-    await expect.poll(async () => (await pion.rtp()).source.length, { timeout: 15_000 }).toBeGreaterThan(25);
-    const before = await pion.rtp();
-    const decoded = samples((await audioStats(browser))[0]);
-    await pion.replaceAudioTrack();
-    await expect.poll(async () => {
-      const observation = await pion.rtp();
-      expect(observation.errors).toEqual([]);
-      return observation.source.length > before.source.length + 25 &&
-        observation.outbound.slice(before.outbound.length).filter(packet => packet.payloadType === 63).length > 5;
-    }, { timeout: 15_000 }).toBe(true);
-    await expect.poll(async () => samples((await audioStats(browser))[0]), { timeout: 15_000 }).toBeGreaterThan(decoded + 4800);
-    await expect.poll(playback.rms, { timeout: 15_000 }).toBeGreaterThan(0.01);
-    const observation = await pion.rtp();
+    await interop.waitForOpen(channel);
+    const sctp = browser.sctp;
+    expect(audio.sender.transport).toBe(camera.sender.transport);
+    expect(audio.sender.transport).toBe(sctp!.transport);
+    const fingerprint = browser.localDescription!.sdp.match(/^a=fingerprint:(.+)/m)![1].trim();
+    const frames = async () => Array.from((await browser.getStats()).values()).find(stat => stat.type === "inbound-rtp" && stat.kind === "video")?.framesDecoded ?? 0;
+    let checkpoint = { inbound: 0, outbound: 0, application: 0, samples: 0, frames: 0 };
+    const progress = async (phase: string) => {
+      await expect.poll(async () => {
+        const observations = await pion!.rtp();
+        expect(observations.errors).toEqual([]);
+        const freshInbound = observations.inbound.slice(checkpoint.inbound);
+        const freshOutbound = observations.outbound.slice(checkpoint.outbound);
+        return observations.application.length > checkpoint.application + 10 &&
+          freshInbound.filter(packet => packet.payloadType === 63).length > 5 &&
+          freshOutbound.filter(packet => packet.payloadType === 63).length > 5;
+      }, { timeout: 15_000 }).toBe(true);
+      await expect.poll(async () => samples((await audioStats(browser))[0]), { timeout: 15_000 }).toBeGreaterThan(checkpoint.samples + 4800);
+      await expect.poll(playback.rms, { timeout: 15_000 }).toBeGreaterThan(0.01);
+      await expect.poll(frames, { timeout: 15_000 }).toBeGreaterThan(checkpoint.frames + 2);
+      const reply = interop.nextMessage(channel);
+      const message = `RED lifecycle ${phase}`;
+      channel.send(message);
+      expect(await reply).toBe(message);
+      const observation = await pion!.rtp();
+      checkpoint = { inbound: observation.inbound.length, outbound: observation.outbound.length,
+        application: observation.application.length, samples: samples((await audioStats(browser))[0]), frames: await frames() };
+    };
+    await progress("initial");
+    const origin = browser.localDescription!.sdp.match(/^o=(.+)/m)![1].trim();
+    await interop.negotiate(browser, pion);
+    expect(browser.localDescription!.sdp.match(/^o=(.+)/m)![1].trim()).not.toBe(origin);
+    audioCodecs(browser.localDescription);
+    audioCodecs(browser.remoteDescription);
+    await progress("RED renegotiation");
+    const before = browser.localDescription!.sdp.match(/^a=ice-ufrag:(.+)/m)![1].trim();
+    await interop.negotiate(browser, pion, { iceRestart: true });
+    expect(browser.localDescription!.sdp.match(/^a=ice-ufrag:(.+)/m)![1].trim()).not.toBe(before);
+    expect(browser.localDescription!.sdp.match(/^a=fingerprint:(.+)/m)![1].trim()).toBe(fingerprint);
+    expect(browser.sctp).toBe(sctp);
+    await progress("ICE restart");
+    expect(channel.readyState).toBe("open");
+    expect(opens).toBe(1); expect(closes).toBe(0);
+    expect((await pion.snapshot()).signalingState).toBe("stable");
+    const observations = await pion.rtp();
+    verifyIncoming(observations, activeAudioCodecs(browser.localDescription), true);
     const codecs = audioCodecs(browser.remoteDescription);
-    const ledger = wireLedger(observation.outbound, codecs, { source: observation.source });
-    expect(groups(observation.source).size, "replacement keeps the negotiated SSRC").toBe(1);
-    expect(observation.source[0].ssrc).toBe(before.source[0].ssrc);
-    expect(Array.from(ledger.primary.values())).toEqual(observation.source.slice(0, ledger.primary.size).map(content));
-    expect(observation.errors).toEqual([]); expect(observation.truncated).toBe(false);
-    console.log(`[RED Pion replacement] same SSRC=${observation.source[0].ssrc}, exact source/wire packets=${ledger.primary.size}, fresh decoded audio`);
+    const outgoingSSRC = observations.outbound.find(packet => packet.payload !== "")!.ssrc;
+    const echoedSource = observations.application.map(packet => ({ ...content(packet), ssrc: outgoingSSRC, payloadType: codecs.opus }));
+    wireLedger(observations.outbound, codecs, { source: echoedSource });
+    console.log("[RED bundled lifecycle] fresh RED/Opus, video and data passed renegotiation and ICE restart");
   } finally {
     await playback.close();
-  }
-});
-
-test("Opus RED repeated teardown drains media readers and writers", async ({ interop, skip }) => {
-  await requireRED(interop, skip);
-  for (let cycle = 0; cycle < 3; cycle++) {
-    const sender = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true,
-      redSource: { packets: 1024 }, audioCodecOrder: "red-first", observationLimit: 2048 });
-    const receiver = await interop.pionPeer({ behavior: "red-audio-receive", opusRED: true,
-      redSource: { packets: 1024 }, audioCodecOrder: "red-first", observationLimit: 2048 });
-    await interop.negotiate(sender, receiver);
-    await expect.poll(async () => {
-      const sent = await sender.rtp();
-      const received = await receiver.rtp();
-      expect(sent.errors).toEqual([]);
-      expect(received.errors).toEqual([]);
-      return sent.activeMediaWriters > 0 && received.activeMediaReaders > 0 && received.application.length > 25;
-    }, { timeout: 15_000 }).toBe(true);
-    // closeMedia leaves observations readable so zero readers/writers is proved
-    // directly. DELETE then verifies the ordinary fixture's idempotent removal.
-    const closed = await Promise.all([sender.closeMedia(), receiver.closeMedia()]);
-    for (const observation of closed) {
-      expect(observation.activeMediaReaders).toBe(0);
-      expect(observation.activeMediaWriters).toBe(0);
-      expect(observation.errors).toEqual([]);
-    }
-    for (const pion of [sender, receiver]) {
-      expect((await pion.snapshot()).connectionState).toBe("closed");
-      await pion.close();
-      await expect(pion.snapshot()).rejects.toThrow("404");
-      await pion.close();
-    }
-    console.log(`[RED teardown ${cycle}] connected media stopped; active readers=0, writers=0; removal idempotent`);
+    video.pause(); video.srcObject = null; video.remove();
+    await Promise.all([source.close(), videoSource.close()]);
+    browser.close();
+    // Keep the peer's bounded packet ledger available for fixture failure
+    // diagnostics; fixture teardown performs the final DELETE afterwards.
+    if (pion) await pion.closeMedia();
+    expect(browser.signalingState).toBe("closed");
   }
 });

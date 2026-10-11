@@ -7,7 +7,6 @@ package testserver
 
 import (
 	"github.com/pion/interceptor"
-	"github.com/pion/interceptor/pkg/red"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -19,17 +18,6 @@ func newOpusREDPeer(
 ) (*webrtc.PeerConnection, error) {
 	media := &webrtc.MediaEngine{}
 	pt := options.payloadTypes()
-	fmtp := "minptime=10;useinbandfec=1"
-	if options.DisableFEC {
-		fmtp = "minptime=10;useinbandfec=0"
-		if err := media.RegisterCodec(webrtc.RTPCodecParameters{
-			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2, SDPFmtpLine: fmtp,
-			}, PayloadType: webrtc.PayloadType(pt.Opus),
-		}, webrtc.RTPCodecTypeAudio); err != nil {
-			return nil, err
-		}
-	}
 	if options.PayloadTypes == nil || pt == (redPayloadTypes{Opus: 111, RED: 63}) {
 		if err := media.RegisterDefaultCodecs(); err != nil {
 			return nil, err
@@ -40,7 +28,7 @@ func newOpusREDPeer(
 		if err := media.RegisterCodec(webrtc.RTPCodecParameters{
 			RTPCodecCapability: webrtc.RTPCodecCapability{
 				MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-				SDPFmtpLine: fmtp,
+				SDPFmtpLine: "minptime=10;useinbandfec=1",
 			}, PayloadType: webrtc.PayloadType(pt.Opus),
 		}, webrtc.RTPCodecTypeAudio); err != nil {
 			return nil, err
@@ -52,11 +40,7 @@ func newOpusREDPeer(
 	}
 	// Observe RED on the wire side of the encoder/decoder, alongside reports and stats.
 	registry.Add(observation)
-	var senderOptions []red.SenderOption
-	if options.MaxPacketSize != 0 {
-		senderOptions = append(senderOptions, red.SenderMaxPacketSize(options.MaxPacketSize))
-	}
-	if err := webrtc.ConfigureOpusRED(webrtc.PayloadType(pt.Opus), webrtc.PayloadType(pt.RED), media, registry, senderOptions...); err != nil {
+	if err := webrtc.ConfigureOpusRED(webrtc.PayloadType(pt.Opus), webrtc.PayloadType(pt.RED), media, registry); err != nil {
 		return nil, err
 	}
 

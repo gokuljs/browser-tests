@@ -91,38 +91,28 @@ func reply(res http.ResponseWriter, value any) {
 
 func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	var body struct {
-		CertificateCount int                   `json:"certificateCount"`
-		Behavior         string                `json:"behavior"`
-		Configuration    webrtc.Configuration  `json:"configuration"`
-		OpusRED          bool                  `json:"opusRED"`
-		StartWithRED     bool                  `json:"startWithRED"`
-		REDPayloadTypes  *redPayloadTypes      `json:"opusREDPayloadTypes"`
-		AudioCodecOrder  string                `json:"audioCodecOrder"`
-		REDSource        *redSourceOptions     `json:"redSource"`
-		REDImpairment    *redImpairmentOptions `json:"redImpairment"`
-		ObservationLimit int                   `json:"observationLimit"`
-		REDMaxPacketSize int                   `json:"redMaxPacketSize"`
+		CertificateCount int                  `json:"certificateCount"`
+		Behavior         string               `json:"behavior"`
+		Configuration    webrtc.Configuration `json:"configuration"`
+		OpusRED          bool                 `json:"opusRED"`
+		StartWithRED     bool                 `json:"startWithRED"`
+		REDPayloadTypes  *redPayloadTypes     `json:"opusREDPayloadTypes"`
+		AudioCodecOrder  string               `json:"audioCodecOrder"`
+		REDSource        *redSourceOptions    `json:"redSource"`
+		ObservationLimit int                  `json:"observationLimit"`
 	}
 	if !decode(res, req, &body) {
 		return
 	}
-	redOptions := redPeerOptions{PayloadTypes: body.REDPayloadTypes, CodecOrder: body.AudioCodecOrder,
-		DisableFEC: body.REDSource != nil || body.REDImpairment != nil, MaxPacketSize: body.REDMaxPacketSize}
+	redOptions := redPeerOptions{PayloadTypes: body.REDPayloadTypes, CodecOrder: body.AudioCodecOrder}
 	if !body.OpusRED && (body.REDPayloadTypes != nil || body.AudioCodecOrder != "" ||
-		body.REDSource != nil || body.REDImpairment != nil || body.ObservationLimit != 0 || body.REDMaxPacketSize != 0) {
+		body.REDSource != nil || body.ObservationLimit != 0) {
 		http.Error(res, "RED audio options require opusRED", http.StatusBadRequest)
 
 		return
 	}
-	if (body.REDSource != nil || body.REDImpairment != nil) &&
-		body.Behavior != "red-audio-send" && body.Behavior != "red-audio-receive" {
-		http.Error(res, "controlled RED source requires an audio send/receive behavior", http.StatusBadRequest)
-
-		return
-	}
-	if body.REDImpairment != nil && (((body.REDImpairment.InboundOrder != nil || len(body.REDImpairment.InboundPayloads) > 0) && body.Behavior != "red-audio-receive") ||
-		(len(body.REDImpairment.OutboundDrop) > 0 && body.Behavior != "red-audio-send")) {
-		http.Error(res, "RED loss and replay controls require their respective send/receive profile", http.StatusBadRequest)
+	if body.REDSource != nil && body.Behavior != "red-audio-send" {
+		http.Error(res, "redSource requires red-audio-send", http.StatusBadRequest)
 
 		return
 	}
@@ -135,11 +125,6 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	}
 	if (body.Behavior == "red-audio-send" || body.Behavior == "red-audio-receive" || body.Behavior == "red-bundled-echo") && !body.OpusRED {
 		http.Error(res, "RED audio behaviors require opusRED", http.StatusBadRequest)
-
-		return
-	}
-	if body.REDSource != nil && body.REDSource.Tracks > 1 && body.Behavior != "red-audio-send" {
-		http.Error(res, "multiple RED source tracks require red-audio-send", http.StatusBadRequest)
 
 		return
 	}
@@ -197,7 +182,7 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	var err error
 	var observation *rtpRecorder
 	if body.OpusRED {
-		observation, err = newRTPRecorder(body.StartWithRED, body.ObservationLimit, body.REDSource, body.REDImpairment)
+		observation, err = newRTPRecorder(body.StartWithRED, body.ObservationLimit, body.REDSource)
 		if err != nil {
 			http.Error(res, err.Error(), http.StatusBadRequest)
 
@@ -348,22 +333,9 @@ func (s *Server) operate(res http.ResponseWriter, req *http.Request) {
 	var result any = map[string]any{}
 	var err error
 	switch req.PathValue("operation") {
-	case "replace-red-audio":
-		if session.observations == nil {
-			http.Error(res, "audio replacement requires a RED sender", http.StatusBadRequest)
-
-			return
-		}
-		var options struct {
-			Index int `json:"index"`
-		}
-		if !decode(res, req, &options) {
-			return
-		}
-		err = session.observations.replaceAudioTrack(options.Index)
 	case "close-red-media":
 		if session.observations == nil {
-			http.Error(res, "media drain observations require a RED peer", http.StatusBadRequest)
+			http.Error(res, "media shutdown requires a RED peer", http.StatusBadRequest)
 
 			return
 		}
