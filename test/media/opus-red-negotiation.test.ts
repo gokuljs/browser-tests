@@ -144,8 +144,10 @@ async function receiveOpusAudio(interop: Interop, skip: Skip, offerer: Offerer) 
     const answer = offerer === "browser" ? browser.remoteDescription : browser.localDescription;
     const opus = opusOnlyCodec(answer);
     if (offerer === "pion") {
-      const offered = audioCodecs(browser.remoteDescription);
-      const audio = browser.remoteDescription!.sdp.split(/(?=^m=)/m).find(section => section.startsWith("m=audio "))!;
+      // Firefox omits RED's channel count when serializing remoteDescription, so inspect Pion's original offer.
+      const offer = await interop.localDescription(pion);
+      const offered = audioCodecs(offer);
+      const audio = offer.sdp!.split(/(?=^m=)/m).find(section => section.startsWith("m=audio "))!;
       expect(audio.split(/\r?\n/)[0].split(" ").slice(3, 5).map(Number), "Pion still offers Opus and RED")
         .toEqual([offered.opus, offered.red]);
       expect(offered.opus).toBe(opus);
