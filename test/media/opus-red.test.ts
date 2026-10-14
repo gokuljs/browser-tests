@@ -89,7 +89,7 @@ test("RED audio works both ways when Pion offers", async ({ interop, skip }) => 
     expect((await pion.rtp()).errors, "no later Pion RED read/write failures").toEqual([]);
     console.log(`[RED Pion offers] inbound=${observations.inbound.length}, ` +
       `outbound=${observations.outbound.length}, Opus deliveries=${delivered.size}, ` +
-      `verified copies=${received.copies}/${sent.copies}, inferred startup copies=${received.inferredCopies}/${sent.inferredCopies}, ` +
+      `verified copies=${received.copies}/${sent.copies}, unidentified startup copies=${received.unidentifiedStartupCopies}/${sent.unidentifiedStartupCopies}, ` +
       `padding-only RTP=${received.padding}/${sent.padding}, decoded samples=${await decodedSamples()}, ` +
       `RTCP receiver report received, sender report packets=${senderReportPackets ?? "unavailable"}, ` +
       `bounded snapshot truncated=${observations.truncated}`);

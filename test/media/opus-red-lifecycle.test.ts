@@ -19,10 +19,8 @@ function activeAudioCodecs(description: RTCSessionDescriptionInit | null) {
   return audioCodecs({ type: description!.type, sdp: audio });
 }
 
-// ICE transitions can lose carrier primaries. RED preserves the missing copy's
-// bytes/timestamp, but not its original sequence number. Those identities are
-// checked against the receiver's contiguous-copy contract and reported as
-// inferred.
+// ICE transitions can lose primaries. Verify copies against observed media and
+// infer missing identities only from completely covered, timestamp-anchored gaps.
 function transitionOutputs(packets: ObservedRTP[], codecs: Codecs) {
   const primaries = new Map<string, ObservedRTP>();
   const copies: { carrier: ObservedRTP; blocks: ReturnType<typeof decodeRED>["redundant"] }[] = [];
@@ -39,31 +37,32 @@ function transitionOutputs(packets: ObservedRTP[], codecs: Codecs) {
     primaries.set(identity(primary), primary);
     copies.push({ carrier, blocks: decoded.redundant });
   }
-  const source = new Map(primaries);
-  const inferred = new Set<string>();
+  const copyPayloads = new Map<number, string>();
   let verifiedCopies = 0;
   for (const { carrier, blocks } of copies) {
-    blocks.forEach((block, index) => {
+    blocks.forEach(block => {
       expect(block.payloadType).toBe(codecs.opus);
       expect(block.offset).toBeGreaterThan(0);
       expect(block.payload.length).toBeGreaterThan(0);
       const timestamp = (carrier.timestamp - block.offset) >>> 0;
-      const known = Array.from(primaries.values()).filter(packet => packet.timestamp === timestamp && packet.payload === block.payload);
+      const previous = copyPayloads.get(timestamp);
+      if (previous !== undefined) expect(block.payload, "consistent copied Opus bytes across carriers").toBe(previous);
+      copyPayloads.set(timestamp, block.payload);
+      const known = Array.from(primaries.values()).filter(packet => packet.timestamp === timestamp);
       expect(known.length, "copy belongs to at most one observed primary in this SSRC").toBeLessThanOrEqual(1);
-      if (known.length) { verifiedCopies++; return; }
-      const copy = { ...content(carrier), payloadType: codecs.opus, payload: block.payload, timestamp,
-        sequenceNumber: (carrier.sequenceNumber - blocks.length + index) & 0xffff };
-      const previous = source.get(identity(copy));
-      if (previous) expect(content(copy), "consistent copy bytes and RTP identity across carriers").toEqual(previous);
-      source.set(identity(copy), copy);
-      inferred.add(identity(copy));
+      if (known.length) {
+        expect(block.payload, "redundancy exactly copies independently observed Opus bytes").toBe(known[0].payload);
+        verifiedCopies++;
+      }
     });
   }
   expect(verifiedCopies, "useful independently verified RED copies remain present").toBeGreaterThan(5);
-  const origin = packets[0].sequenceNumber;
-  const position = (sequence: number) => (sequence - origin + 0x8000 & 0xffff) - 0x8000;
-  const sorted = Array.from(source.values()).sort((left, right) => position(left.sequenceNumber) - position(right.sequenceNumber));
-  return { outputs: expectedDeliveries(sorted, packets, codecs), inferred: inferred.size,
+  const outputs = expectedDeliveries(packets, codecs);
+  for (const packet of outputs) {
+    const known = primaries.get(identity(packet));
+    if (known) expect(packet, "recovered bytes and identity match any independently observed primary").toEqual(known);
+  }
+  return { outputs, inferred: new Set(outputs.filter(packet => !primaries.has(identity(packet))).map(identity)).size,
     maxPending: Math.max(...copies.map(copy => copy.blocks.length)) + 1 };
 }
 
@@ -82,10 +81,10 @@ function verifyIncoming(observations: RTPObservations, codecs: Codecs, transitio
       expect(new Set(deliveries.map(identity)).size, "no duplicate application deliveries").toBe(deliveries.length);
       expect(deliveries.length).toBeGreaterThan(25);
       console.log(`[RED lifecycle SSRC ${ssrc}] exact observed primaries and decoded copies; ` +
-        `copy identities inferred from receiver contract=${expected.inferred}`);
+        `copy identities inferred from timestamp-anchored gaps=${expected.inferred}`);
       continue;
     }
-    const ledger = wireLedger(packets, codecs, { inferStartup: false });
+    const ledger = wireLedger(packets, codecs, { allowUnidentifiedStartup: false });
     const delivered = new Set<string>();
     for (const packet of deliveries) {
       expect(delivered.has(identity(packet)), "no duplicate delivery within an SSRC").toBe(false);
