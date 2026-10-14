@@ -118,7 +118,7 @@ export const identity = (packet: ObservedRTP) => `${packet.ssrc}/${packet.sequen
 export const content = ({ ssrc, sequenceNumber, timestamp, payloadType, payload }: ObservedRTP): ObservedRTP =>
   ({ ssrc, sequenceNumber, timestamp, payloadType, payload });
 
-export function wireLedger(packets: ObservedRTP[], codecs: Codecs, options: { source?: ObservedRTP[]; inferStartup?: boolean } = {}) {
+export function wireLedger(packets: ObservedRTP[], codecs: Codecs, options: { source?: ObservedRTP[]; allowUnidentifiedStartup?: boolean } = {}) {
   const authoritative = options.source?.map(content);
   const primary = new Map<string, ObservedRTP>();
   const sources = new Map<string, ObservedRTP>();
@@ -127,7 +127,7 @@ export function wireLedger(packets: ObservedRTP[], codecs: Codecs, options: { so
   const depths: number[] = [];
   let padding = 0;
   let knownCopies = 0;
-  let inferredCopies = 0;
+  let unidentifiedStartupCopies = 0;
   const add = (packet: ObservedRTP) => {
     const previous = sources.get(identity(packet));
     if (previous) expect(packet.payload, "consistent RED source bytes").toBe(previous.payload);
@@ -158,7 +158,7 @@ export function wireLedger(packets: ObservedRTP[], codecs: Codecs, options: { so
   // Resolve copies using independently observed primaries. RTP padding consumes
   // sequence numbers, so a copy need not be the immediately preceding RTP packet.
   for (const { packet, blocks } of carriers) {
-    blocks.forEach((block, index) => {
+    blocks.forEach(block => {
       expect(block.payloadType, "redundant block protects Opus").toBe(codecs.opus);
       expect(block.offset, "redundant block carries earlier audio").toBeGreaterThan(0);
       expect(block.payload.length, "redundant Opus bytes").toBeGreaterThan(0);
@@ -172,76 +172,85 @@ export function wireLedger(packets: ObservedRTP[], codecs: Codecs, options: { so
         knownCopies++;
         return;
       }
-      expect(Boolean(authoritative) || options.inferStartup === false, "missing independent sequence identity for redundant audio").toBe(false);
-      // Only startup copies can precede this no-loss observation window. Their
-      // sequence identity uses the receiver's documented contiguous-copy contract.
+      expect(Boolean(authoritative) || options.allowUnidentifiedStartup === false, "missing independent sequence identity for redundant audio").toBe(false);
+      // A startup copy can precede the observation window, but RED does not
+      // identify its sequence number. Verify its timestamp without guessing one.
       const origin = first.get(packet.ssrc)!;
       expect((timestamp - origin.timestamp) | 0, "unseen copy precedes first observed primary").toBeLessThan(0);
-      const sequenceNumber = (packet.sequenceNumber - blocks.length + index) & 0xffff;
-      expect((sequenceNumber - origin.sequenceNumber + 0x8000 & 0xffff) - 0x8000,
-        "inferred startup sequence precedes observed primaries").toBeLessThan(0);
-      const copy = { ...content(packet), payloadType: codecs.opus, payload: block.payload, sequenceNumber, timestamp };
-      add(copy);
-      inferredCopies++;
+      unidentifiedStartupCopies++;
     });
   }
   expect(depths.length, "actual wire RED carriers").toBeGreaterThan(5);
   expect(knownCopies, "useful verified redundancy").toBeGreaterThan(5);
-  return { sources, primary, depths, copies: knownCopies, inferredCopies, padding };
+  return { sources, primary, depths, copies: knownCopies, unidentifiedStartupCopies, padding };
 }
 
-// Predict per-carrier delivery across lifecycle loss, padding, and the receive window.
-export function expectedDeliveries(source: ObservedRTP[], carriers: ObservedRTP[], codecs: Codecs) {
-  const known = new Map(source.map(packet => [identity(packet), content(packet)]));
-  const positions = new Map<string, number>();
-  let previous = source[0]?.sequenceNumber ?? 0, extended = previous;
-  source.forEach((packet, index) => {
-    if (index) extended += (packet.sequenceNumber - previous + 0x8000 & 0xffff) - 0x8000;
-    previous = packet.sequenceNumber;
-    positions.set(identity(packet), extended);
-  });
-  const output: ObservedRTP[] = [], delivered = new Set<number>(), padding = new Set<number>();
+// Predict default recovery only when timestamp-ordered copies cover an entire
+// gap between known media packets; padding consumes a sequence number, not audio.
+export function expectedDeliveries(carriers: ObservedRTP[], codecs: Codecs) {
+  const output: ObservedRTP[] = [];
+  const history = new Map<number, ObservedRTP | null>();
   let highest: number | undefined;
   for (const carrier of carriers) {
+    let position = carrier.sequenceNumber;
+    if (highest !== undefined) {
+      position += Math.floor(highest / 0x10000) * 0x10000;
+      if (position - highest > 0x8000) position -= 0x10000;
+      else if (highest - position > 0x8000) position += 0x10000;
+    }
+    if (highest !== undefined && highest - position >= 64) continue;
+    const reset = highest !== undefined && position - highest >= 64;
+    if (reset) history.clear();
+    const reference = Math.max(highest ?? position, position);
+    for (const sequence of history.keys()) {
+      if (reference - sequence >= 64) history.delete(sequence);
+    }
     if (carrier.padding && carrier.payload === "") {
-      const position = highest === undefined ? carrier.sequenceNumber : highest +
-        ((carrier.sequenceNumber - (highest & 0xffff) + 0x8000 & 0xffff) - 0x8000);
-      if (highest !== undefined && highest - position >= 64) continue;
-      if (highest !== undefined && position - highest >= 64) {
-        delivered.clear();
-        padding.clear();
-      }
-      padding.add(position);
-      delivered.add(position);
-      highest = Math.max(highest ?? position, position);
+      history.set(position, null);
+      highest = reference;
       continue;
     }
-    const primarySource = known.get(identity(carrier));
-    expect(primarySource, "carrier identity belongs to the stream").toBeDefined();
-    const position = positions.get(identity(carrier))!;
-    if (highest !== undefined && highest - position >= 64) continue;
-    if (highest !== undefined && position - highest >= 64) {
-      delivered.clear();
-      padding.clear();
-    }
-    const reference = Math.max(highest ?? position, position);
     const decoded = carrier.payloadType === codecs.red ? decodeRED(carrier.payload) : {
       redundant: [], primary: { payloadType: carrier.payloadType, payload: carrier.payload, offset: 0 },
     };
     expect(decoded.primary.payloadType).toBe(codecs.opus);
-    expect(decoded.primary.payload).toBe(primarySource!.payload);
+    const primary = { ...content(carrier), payloadType: codecs.opus, payload: decoded.primary.payload };
+    const copies = new Map<number, Block[]>();
     for (const block of decoded.redundant) {
-      expect(block.payloadType).toBe(codecs.opus);
-      const timestamp = (carrier.timestamp - block.offset) >>> 0;
-      const candidates = source.filter(packet => packet.ssrc === carrier.ssrc && packet.timestamp === timestamp && packet.payload === block.payload);
-      expect(candidates, "copy resolves to exactly one stream identity").toHaveLength(1);
-      const copy = content(candidates[0]), copyPosition = positions.get(identity(copy))!;
-      if (block.offset === 0 || !block.payload || reference - copyPosition >= 64 ||
-          Array.from(padding).some(sequence => sequence >= copyPosition && sequence < position)) continue;
-      if (!delivered.has(copyPosition)) { output.push(copy); delivered.add(copyPosition); }
+      if (block.payloadType !== codecs.opus || block.offset === 0 || !block.payload) continue;
+      copies.set(block.offset, [...(copies.get(block.offset) ?? []), block]);
     }
-    if (!delivered.has(position)) { output.push(primarySource!); delivered.add(position); }
-    highest = reference;
+    const blocks = Array.from(copies.values()).filter(copies => copies.every(copy => copy.payload === copies[0].payload))
+      .map(copies => copies[0]).sort((left, right) => right.offset - left.offset);
+    const recovered = new Map<number, ObservedRTP>();
+    if (!reset && (!history.has(position) || history.get(position)?.timestamp === carrier.timestamp)) {
+      const anchors = Array.from(history.entries()).filter((entry): entry is [number, ObservedRTP] => entry[1] !== null);
+      if (!history.has(position)) anchors.push([position, primary]);
+      anchors.sort((left, right) => left[0] - right[0]);
+      for (let index = 1; index < anchors.length; index++) {
+        const [leftSequence, left] = anchors[index - 1], [rightSequence, right] = anchors[index];
+        const distance = (right.timestamp - left.timestamp) >>> 0;
+        if (distance === 0 || distance >= 0x80000000) continue;
+        const missing: number[] = [];
+        for (let sequence = leftSequence + 1; sequence < rightSequence; sequence++) {
+          if (!history.has(sequence)) missing.push(sequence);
+        }
+        const candidates = blocks.filter(block => {
+          const offset = (carrier.timestamp - block.offset - left.timestamp) >>> 0;
+          return offset > 0 && offset < distance;
+        });
+        if (candidates.length !== missing.length) continue;
+        candidates.forEach((block, index) => recovered.set(missing[index], { ...primary,
+          sequenceNumber: missing[index] & 0xffff, timestamp: (carrier.timestamp - block.offset) >>> 0, payload: block.payload }));
+      }
+    }
+    output.push(...recovered.values());
+    if (!history.has(position)) output.push(primary);
+    if (recovered.size || !history.has(position)) {
+      for (const [sequence, packet] of recovered) history.set(sequence, packet);
+      history.set(position, primary);
+      highest = reference;
+    }
   }
   return output;
 }
