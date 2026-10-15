@@ -69,16 +69,6 @@ repository, such as a fork.
 Use `--interceptor /path/to/interceptor` or `PION_INTERCEPTOR_SOURCE` to select an
 interceptor checkout or ref. `PION_INTERCEPTOR_REPOSITORY` selects its repository.
 
-## RED browser tests
-
-Run the ten quick cases using RED-enabled WebRTC and interceptor checkouts:
-
-```sh
-VITE_REQUIRE_OPUS_RED=pion npm run test:chrome -- \
-  --webrtc /path/to/webrtc --interceptor /path/to/interceptor \
-  test/media/opus-red --browser.fileParallelism=false --retry=0
-```
-
 ## Development
 
 Browser tests live in [test/](test/). Shared fixtures in
