@@ -40,8 +40,7 @@ set `TEST_HEADLESS=false` to show another browser's window.
 With Nix, `nix develop` provides Go and Node.js. On Linux it also provides
 Chromium, Firefox, and their WebDrivers.
 
-Arguments after `--` are forwarded to Vitest, apart from `--webrtc` and
-`--interceptor`:
+Arguments after `--` are forwarded to Vitest, apart from `--webrtc`:
 
 ```sh
 npm run test:chrome -- test/media/srtp.test.ts
@@ -65,9 +64,6 @@ workspace.
 `PION_WEBRTC_SOURCE` is the environment-variable equivalent of `--webrtc`.
 Set `PION_WEBRTC_REPOSITORY` to fetch remote revisions from a different Git
 repository, such as a fork.
-
-Use `--interceptor /path/to/interceptor` or `PION_INTERCEPTOR_SOURCE` to select an
-interceptor checkout or ref. `PION_INTERCEPTOR_REPOSITORY` selects its repository.
 
 ## Development
 

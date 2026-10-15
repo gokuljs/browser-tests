@@ -87,9 +87,7 @@ const execute = async (command: string, args: string[], options: CommandOptions 
 
 const parseArguments = () => {
   let source = process.env.PION_WEBRTC_SOURCE || "";
-  let interceptorSource = process.env.PION_INTERCEPTOR_SOURCE || "";
   let selected = false;
-  let interceptorSelected = false;
   const args = process.argv.slice(2);
   const vitestArgs: string[] = [];
   for (let index = 0; index < args.length; index++) {
@@ -103,20 +101,11 @@ const parseArguments = () => {
         throw new Error("--webrtc requires a checkout path, branch, tag, or commit");
       }
       selected = true;
-    } else if (arg === "--interceptor" || arg.startsWith("--interceptor=")) {
-      if (interceptorSelected) {
-        throw new Error("Specify --interceptor only once");
-      }
-      interceptorSource = arg === "--interceptor" ? args[++index] : arg.slice("--interceptor=".length);
-      if (!interceptorSource || interceptorSource.startsWith("-")) {
-        throw new Error("--interceptor requires a checkout path, branch, tag, or commit");
-      }
-      interceptorSelected = true;
     } else {
       vitestArgs.push(arg);
     }
   }
-  return { source, interceptorSource, vitestArgs };
+  return { source, vitestArgs };
 };
 
 const prepareWorkspace = async (source: string, directory: string) => {
@@ -186,48 +175,6 @@ const prepareWorkspace = async (source: string, directory: string) => {
   cwd = await realpath(cwd);
   await execute("go", ["work", "init", cwd, checkout], { cwd: directory, env });
   return { cwd, env: { ...env, GOWORK: path.join(directory, "go.work") }, webrtcPackage: modulePath };
-};
-
-const prepareInterceptor = async (
-  source: string, directory: string, workspace: { cwd: string; env: NodeJS.ProcessEnv; webrtcPackage: string },
-) => {
-  if (!source) return workspace;
-  const env = { ...workspace.env, GOWORK: "off" };
-  let checkout = path.resolve(source);
-  const info = await stat(checkout).catch((error: NodeJS.ErrnoException) => {
-    if (error.code !== "ENOENT") throw error;
-    return undefined;
-  });
-  if (info) {
-    if (!info.isDirectory()) {
-      throw new Error(`interceptor checkout is not a directory: ${checkout}`);
-    }
-  } else {
-    if (path.isAbsolute(source) || /^\.{1,2}([/\\]|$)/.test(source)) {
-      throw new Error(`interceptor checkout does not exist: ${checkout}`);
-    }
-    checkout = path.join(directory, "interceptor");
-    const repository = process.env.PION_INTERCEPTOR_REPOSITORY || "https://github.com/pion/interceptor.git";
-    await execute("git", ["init", "--quiet", checkout]);
-    await execute("git", ["-C", checkout, "fetch", "--quiet", "--depth=1", repository, "--", source]);
-    await execute("git", ["-C", checkout, "checkout", "--quiet", "--detach", "FETCH_HEAD"]);
-    const commit = await execute("git", ["-C", checkout, "rev-parse", "HEAD"], { capture: true });
-    console.log(`Testing Pion interceptor ref ${source} at ${commit}`);
-  }
-  checkout = await realpath(checkout);
-  const modulePath = await execute("go", ["list", "-m", "-f", "{{.Path}}"], {
-    cwd: checkout, env, capture: true,
-  });
-  if (modulePath !== "github.com/pion/interceptor") {
-    throw new Error(`Expected github.com/pion/interceptor checkout, got ${modulePath}`);
-  }
-  console.log(`Testing Pion interceptor checkout: ${checkout}`);
-  if (workspace.env.GOWORK === "off") {
-    await execute("go", ["work", "init", workspace.cwd, checkout], { cwd: directory, env });
-  } else {
-    await execute("go", ["work", "use", checkout], { cwd: directory, env: workspace.env });
-  }
-  return { ...workspace, env: { ...env, GOWORK: path.join(directory, "go.work") } };
 };
 
 const stop = async (child: ManagedChild) => {
@@ -310,18 +257,14 @@ for (const signal of signals) {
 }
 
 try {
-  const { source, interceptorSource, vitestArgs } = parseArguments();
+  const { source, vitestArgs } = parseArguments();
   if (source && process.env.TEST_SERVER_URL) {
     throw new Error("Cannot select a WebRTC checkout/ref when TEST_SERVER_URL uses an external server");
-  }
-  if (interceptorSource && process.env.TEST_SERVER_URL) {
-    throw new Error("Cannot select an interceptor checkout/ref when TEST_SERVER_URL uses an external server");
   }
   if (!process.env.TEST_SERVER_URL) {
     buildDir = await mkdtemp(path.join(tmpdir(), "pion-browser-tests-"));
     buildDir = await realpath(buildDir);
-    const workspace = await prepareWorkspace(source, buildDir);
-    const { env, cwd, webrtcPackage } = await prepareInterceptor(interceptorSource, buildDir, workspace);
+    const { env, cwd, webrtcPackage } = await prepareWorkspace(source, buildDir);
     const executable = path.join(buildDir, process.platform === "win32" ? "server.exe" : "server");
     const api = await execute("go", ["doc", "-short", webrtcPackage], { env, cwd, capture: true });
     const buildArgs = ["build", "-buildvcs=false", "-o", executable];
