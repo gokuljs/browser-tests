@@ -2,25 +2,10 @@
  * SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
  * SPDX-License-Identifier: MIT
  */
-import { expect, type AudioCodecOrder, type Interop, type ObservedRTP } from "./interop";
+import { expect, type AudioCodecOrder, type ObservedRTP } from "./interop";
 
 export type Codecs = { opus: number; red: number };
 type Block = { payloadType: number; offset: number; payload: string };
-
-// Require Pion RED support while unsupported browser directions skip.
-// Strict mode also requires every browser direction used by the selected case.
-export async function requireRED(interop: Interop, skip: (condition: boolean, note?: string) => void,
-  ...directions: ("Send" | "Receive")[]) {
-  const mode = import.meta.env.VITE_REQUIRE_OPUS_RED;
-  expect([undefined, "", "pion", "1"], "VITE_REQUIRE_OPUS_RED must be unset, pion, or 1").toContain(mode);
-  const capabilities = ["pion.opusRED", ...directions.map(direction => `browser.opusRED${direction}` as const)] as const;
-  for (const name of capabilities) {
-    const support = await interop.features.check(name);
-    const reason = `${name}: ${support.reason ?? "required for RED validation"}`;
-    if (mode === "1" || mode === "pion" && name === "pion.opusRED") expect(support.supported, reason).toBe(true);
-    else skip(!support.supported, reason);
-  }
-}
 
 export function preferAudioCodecs(transceiver: RTCRtpTransceiver, direction: "send" | "receive",
   order: AudioCodecOrder = "red-first") {

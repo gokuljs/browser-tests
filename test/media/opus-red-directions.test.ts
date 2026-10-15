@@ -4,7 +4,7 @@
  */
 import { test, expect } from "../fixtures/interop";
 import { audioSink } from "../fixtures/media";
-import { audioCodecs, content, decodeRED, identity, wireLedger, preferAudioCodecs, requireRED } from "../fixtures/opus-red";
+import { audioCodecs, content, decodeRED, identity, wireLedger, preferAudioCodecs } from "../fixtures/opus-red";
 
 const stats = async (browser: RTCPeerConnection) => Array.from((await browser.getStats()).values());
 const inbound = async (browser: RTCPeerConnection) => (await stats(browser)).find(stat =>
@@ -16,7 +16,7 @@ const decodedSamples = async (browser: RTCPeerConnection) => {
 
 // Check that playback starts when the first arriving audio packet is RED.
 test("Browser plays audio when Pion starts with RED", async ({ interop, skip }) => {
-  await requireRED(interop, skip, "Receive");
+  await interop.features.require({ skip }, "pion.opusRED", "browser.opusREDReceive");
   const browser = interop.browserPeer();
   const playback = await audioSink(browser);
   try {

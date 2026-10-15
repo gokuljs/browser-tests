@@ -4,7 +4,7 @@
  */
 import { test, expect, type ObservedRTP, type PionPeer, type RTPObservations } from "../fixtures/interop";
 import { audioSink, mediaSource, oscillatorSource } from "../fixtures/media";
-import { audioCodecs, content, decodeRED, expectedDeliveries, identity, preferAudioCodecs, requireRED, wireLedger, type Codecs } from "../fixtures/opus-red";
+import { audioCodecs, content, decodeRED, expectedDeliveries, identity, preferAudioCodecs, wireLedger, type Codecs } from "../fixtures/opus-red";
 
 const audioStats = async (browser: RTCPeerConnection) => Array.from((await browser.getStats()).values())
   .filter(stat => stat.type === "inbound-rtp" && stat.kind === "audio") as RTCInboundRtpStreamStats[];
@@ -138,7 +138,7 @@ async function multiAudioSink(browser: RTCPeerConnection) {
 
 // Check separate stream identities and correct audio delivery for two browser tracks.
 test("Pion keeps two browser RED audio streams separate", async ({ interop, skip }) => {
-  await requireRED(interop, skip, "Send");
+  await interop.features.require({ skip }, "pion.opusRED", "browser.opusREDSend");
   const sources = await Promise.all([oscillatorSource(440), oscillatorSource(880)]);
   try {
     const browser = interop.browserPeer();
@@ -169,7 +169,7 @@ test("Pion keeps two browser RED audio streams separate", async ({ interop, skip
 
 // Check separate packet histories and audible playback on both browser tracks.
 test("Browser plays two separate Pion RED audio streams", async ({ interop, skip }) => {
-  await requireRED(interop, skip, "Receive");
+  await interop.features.require({ skip }, "pion.opusRED", "browser.opusREDReceive");
   const browser = interop.browserPeer();
   const playback = await multiAudioSink(browser);
   try {
@@ -216,7 +216,7 @@ test("Browser plays two separate Pion RED audio streams", async ({ interop, skip
 
 // Check that fresh media and data continue after both connection changes.
 test("RED audio, video, and data survive renegotiation and ICE restart", async ({ interop, skip }) => {
-  await requireRED(interop, skip, "Send", "Receive");
+  await interop.features.require({ skip }, "pion.opusRED", "browser.opusREDSend", "browser.opusREDReceive");
   const source = await oscillatorSource(440);
   const videoSource = await mediaSource("video");
   const browser = interop.browserPeer();

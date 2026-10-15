@@ -5,11 +5,11 @@
 import { test, expect } from "../fixtures/interop";
 import { audioSink, oscillatorSource } from "../fixtures/media";
 
-import { audioCodecs, wireLedger, identity, content, preferAudioCodecs, requireRED } from "../fixtures/opus-red";
+import { audioCodecs, wireLedger, identity, content, preferAudioCodecs } from "../fixtures/opus-red";
 
 // Check browser RED transmission, exact Pion delivery and echo, and audible browser playback.
 test("RED audio works both ways when Pion offers", async ({ interop, skip }) => {
-  await requireRED(interop, skip, "Send", "Receive");
+  await interop.features.require({ skip }, "pion.opusRED", "browser.opusREDSend", "browser.opusREDReceive");
 
   const media = await oscillatorSource();
   const browser = interop.browserPeer();

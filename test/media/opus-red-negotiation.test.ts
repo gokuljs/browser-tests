@@ -4,7 +4,7 @@
  */
 import { test, expect, type AudioCodecOrder, type Interop, type PionPeer } from "../fixtures/interop";
 import { audioSink, oscillatorSource } from "../fixtures/media";
-import { audioCodecs, content, identity, opusLedger, opusOnlyCodec, preferAudioCodecs, requireRED, wireLedger } from "../fixtures/opus-red";
+import { audioCodecs, content, identity, opusLedger, opusOnlyCodec, preferAudioCodecs, wireLedger } from "../fixtures/opus-red";
 
 type Offerer = "browser" | "pion";
 type Skip = (condition: boolean, note?: string) => void;
@@ -74,7 +74,7 @@ async function verifyPlayback(browser: RTCPeerConnection, pion: PionPeer, playba
 // Check negotiation, packet identifiers, and playback with non-default codec mappings.
 test("Browser plays RED using payload types 109 and 112", async ({ interop, skip }) => {
   const pair = { opus: 109, red: 112 };
-  await requireRED(interop, skip, "Receive");
+  await interop.features.require({ skip }, "pion.opusRED", "browser.opusREDReceive");
   const browser = interop.browserPeer();
   const playback = await audioSink(browser);
   try {
@@ -112,7 +112,7 @@ test("Browser plays RED using payload types 109 and 112", async ({ interop, skip
 });
 
 async function playOpusAudio(interop: Interop, skip: Skip, offerer: Offerer) {
-  await requireRED(interop, skip);
+  await interop.features.require({ skip }, "pion.opusRED");
   const browser = interop.browserPeer();
   const playback = await audioSink(browser);
   try {
@@ -132,7 +132,7 @@ async function playOpusAudio(interop: Interop, skip: Skip, offerer: Offerer) {
 }
 
 async function receiveOpusAudio(interop: Interop, skip: Skip, offerer: Offerer) {
-  await requireRED(interop, skip);
+  await interop.features.require({ skip }, "pion.opusRED");
   const media = await oscillatorSource();
   try {
     const browser = interop.browserPeer();
