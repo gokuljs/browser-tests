@@ -111,15 +111,22 @@ test("Browser plays RED using payload types 109 and 112", async ({ interop, skip
   }
 });
 
-async function playOpusAudio(interop: Interop, skip: Skip, offerer: Offerer) {
+async function playOpusAudio(interop: Interop, skip: Skip, offerer: Offerer,
+  offerCodecs: AudioCodecOrder = "opus-only") {
   await interop.features.require({ skip }, "pion.opusRED");
+  if (offerCodecs === "red-first") await interop.features.require({ skip }, "browser.opusREDReceive");
   const browser = interop.browserPeer();
   const playback = await audioSink(browser);
   try {
-    const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true });
-    await negotiate(interop, browser, pion, offerer, "receive", "opus-only");
+    const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true,
+      audioCodecOrder: offerCodecs === "red-first" ? "opus-only" : undefined });
+    await negotiate(interop, browser, pion, offerer, "receive", offerCodecs);
     const answer = offerer === "browser" ? browser.remoteDescription : browser.localDescription;
     const opus = opusOnlyCodec(answer);
+    if (offerCodecs === "red-first") {
+      expect(audioCodecs(browser.localDescription).opus, "RED offer and Opus-only answer agree on Opus")
+        .toBe(opus);
+    }
     const observations = await verifyPlayback(browser, pion, playback);
     const ledger = opusLedger(observations.outbound, opus, observations.source);
     expect(Array.from(ledger.primary.values()), "plain playback preserves every source packet")
@@ -192,6 +199,11 @@ async function receiveOpusAudio(interop: Interop, skip: Skip, offerer: Offerer) 
 // Check that Pion answers with Opus and sends playable audio.
 test("Browser offers Opus only and plays Pion audio", async ({ interop, skip }) => {
   await playOpusAudio(interop, skip, "browser");
+});
+
+// Keep RED configured on Pion while its answer disables RED for the sender.
+test("Pion answers a RED offer with Opus-only audio", async ({ interop, skip }) => {
+  await playOpusAudio(interop, skip, "browser", "red-first");
 });
 
 // Check that Pion accepts and delivers the browser's plain Opus audio.
