@@ -46,40 +46,43 @@ export async function oscillatorSource(frequency = 440) {
   } };
 }
 
-// Muted playback keeps remote audio flowing while an analyser measures the tone.
+// Each track has its own muted playback and analyser so silent tracks cannot
+// be masked by another stream's audio.
 export async function audioSink(browser: RTCPeerConnection) {
   const context = new AudioContext();
-  const sink = document.createElement("video");
-  sink.autoplay = true;
-  sink.playsInline = true;
-  sink.muted = true;
-  document.body.append(sink);
-  const analyser = context.createAnalyser();
+  const sinks = new Map<string, { element: HTMLVideoElement; rms: () => number }>();
   const output = context.createGain();
   output.gain.value = 0;
-  analyser.connect(output).connect(context.destination);
-  let receivedTrack = false;
+  output.connect(context.destination);
   const receive = ({ track }: RTCTrackEvent) => {
     if (track.kind !== "audio") return;
+    const element = document.createElement("video");
+    element.autoplay = element.playsInline = element.muted = true;
     const stream = new MediaStream([track]);
-    sink.srcObject = stream;
-    context.createMediaStreamSource(stream).connect(analyser);
-    receivedTrack = true;
+    element.srcObject = stream;
+    document.body.append(element);
+    const analyser = context.createAnalyser();
+    context.createMediaStreamSource(stream).connect(analyser).connect(output);
+    const waveform = new Float32Array(analyser.fftSize);
+    sinks.set(track.id, { element, rms: () => {
+      analyser.getFloatTimeDomainData(waveform);
+      return Math.sqrt(waveform.reduce((sum, sample) => sum + sample * sample, 0) / waveform.length);
+    } });
   };
   browser.addEventListener("track", receive);
   await context.resume();
-  const waveform = new Float32Array(analyser.fftSize);
   return {
-    receivedTrack: () => receivedTrack,
-    rms: () => {
-      analyser.getFloatTimeDomainData(waveform);
-      return Math.sqrt(waveform.reduce((sum, sample) => sum + sample * sample, 0) / waveform.length);
-    },
+    sinks,
+    receivedTrack: () => sinks.size > 0,
+    rms: () => sinks.size ? Math.min(...Array.from(sinks.values(), sink => sink.rms())) : 0,
     close: async () => {
       browser.removeEventListener("track", receive);
-      sink.pause();
-      sink.srcObject = null;
-      sink.remove();
+      for (const { element } of sinks.values()) {
+        element.pause();
+        element.srcObject = null;
+        element.remove();
+      }
+      sinks.clear();
       await context.close();
     },
   };

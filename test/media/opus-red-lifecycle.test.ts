@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 import { test, expect, type ObservedRTP, type RTPObservations } from "../fixtures/interop";
-import { oscillatorSource } from "../fixtures/media";
+import { audioSink, oscillatorSource } from "../fixtures/media";
 import { audioCodecs, content, decodeRED, identity, preferAudioCodecs, wireLedger, type Codecs } from "../fixtures/opus-red";
 
 const audioStats = async (browser: RTCPeerConnection) => Array.from((await browser.getStats()).values())
@@ -73,38 +73,6 @@ function verifyIncoming(observations: RTPObservations, codecs: Codecs) {
   return streams;
 }
 
-// One muted sink and analyser for each track prevents a working stream from
-// masking silent audio on another stream.
-async function multiAudioSink(browser: RTCPeerConnection) {
-  const context = new AudioContext();
-  const sinks = new Map<string, { element: HTMLVideoElement; rms: () => number }>();
-  const receive = ({ track }: RTCTrackEvent) => {
-    if (track.kind !== "audio") return;
-    const element = document.createElement("video");
-    element.autoplay = element.playsInline = element.muted = true;
-    element.srcObject = new MediaStream([track]);
-    document.body.append(element);
-    const analyser = context.createAnalyser();
-    const output = context.createGain();
-    output.gain.value = 0;
-    context.createMediaStreamSource(element.srcObject).connect(analyser).connect(output).connect(context.destination);
-    const waveform = new Float32Array(analyser.fftSize);
-    sinks.set(track.id, { element, rms: () => {
-      analyser.getFloatTimeDomainData(waveform);
-      return Math.sqrt(waveform.reduce((sum, sample) => sum + sample * sample, 0) / waveform.length);
-    } });
-  };
-  browser.addEventListener("track", receive);
-  await context.resume();
-  return { sinks, close: async () => {
-    browser.removeEventListener("track", receive);
-    for (const { element } of sinks.values()) {
-      element.pause(); element.srcObject = null; element.remove();
-    }
-    await context.close();
-  } };
-}
-
 // Check separate stream identities and correct audio delivery for two browser tracks.
 test("Pion keeps two browser RED audio streams separate", async ({ interop, skip }) => {
   await interop.features.require({ skip }, "pion.opusRED", "browser.opusREDSend");
@@ -140,7 +108,7 @@ test("Pion keeps two browser RED audio streams separate", async ({ interop, skip
 test("Browser plays two separate Pion RED audio streams", async ({ interop, skip }) => {
   await interop.features.require({ skip }, "pion.opusRED", "browser.opusREDReceive");
   const browser = interop.browserPeer();
-  const playback = await multiAudioSink(browser);
+  const playback = await audioSink(browser);
   try {
     for (let index = 0; index < 2; index++) {
       preferAudioCodecs(browser.addTransceiver("audio", { direction: "recvonly" }), "receive");
@@ -156,7 +124,7 @@ test("Browser plays two separate Pion RED audio streams", async ({ interop, skip
     await expect.poll(async () => (await audioStats(browser)).every(stat => samples(stat) > 4800),
       { timeout: 15_000 }).toBe(true);
     expect(playback.sinks.size).toBe(2);
-    await expect.poll(() => Array.from(playback.sinks.values()).every(sink => sink.rms() > 0.01), { timeout: 15_000 }).toBe(true);
+    await expect.poll(playback.rms, { timeout: 15_000 }).toBeGreaterThan(0.01);
     const observations = await pion.rtp();
     expect(observations.errors).toEqual([]);
     const sourceStreams = groups(observations.source);
