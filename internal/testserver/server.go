@@ -96,14 +96,13 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 		REDPayloadTypes  *redPayloadTypes     `json:"opusREDPayloadTypes"`
 		AudioCodecOrder  string               `json:"audioCodecOrder"`
 		REDSource        *redSourceOptions    `json:"redSource"`
-		ObservationLimit int                  `json:"observationLimit"`
 	}
 	if !decode(res, req, &body) {
 		return
 	}
 	redOptions := redPeerOptions{PayloadTypes: body.REDPayloadTypes, CodecOrder: body.AudioCodecOrder}
 	if !body.OpusRED && (body.REDPayloadTypes != nil || body.AudioCodecOrder != "" ||
-		body.REDSource != nil || body.ObservationLimit != 0) {
+		body.REDSource != nil) {
 		http.Error(res, "RED audio options require opusRED", http.StatusBadRequest)
 
 		return
@@ -174,7 +173,7 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	var err error
 	var observation *rtpRecorder
 	if body.OpusRED {
-		observation, err = newRTPRecorder(body.ObservationLimit, body.REDSource)
+		observation, err = newRTPRecorder(body.REDSource)
 		if err != nil {
 			http.Error(res, err.Error(), http.StatusBadRequest)
 

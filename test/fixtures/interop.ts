@@ -116,7 +116,7 @@ export class Interop {
 
   async pionPeer(options: { behavior?: string; configuration?: RTCConfiguration; certificateCount?: number; opusRED?: boolean;
     opusREDPayloadTypes?: { opus: number; red: number }; audioCodecOrder?: AudioCodecOrder;
-    redSource?: { tracks?: number }; observationLimit?: number } = {}): Promise<PionPeer> {
+    redSource?: { tracks?: number } } = {}): Promise<PionPeer> {
     const { id, certificateFingerprints } = await request<{ id: string; certificateFingerprints?: string[] }>("/peers", "POST", options);
     const peer = new PionPeer(id, certificateFingerprints, options.opusRED);
     this.pions.push(peer);

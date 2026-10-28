@@ -115,7 +115,7 @@ test("Pion keeps two browser RED audio streams separate", async ({ interop, skip
       const transceiver = browser.addTransceiver(source.stream.getAudioTracks()[0], { direction: "sendonly", streams: [source.stream] });
       preferAudioCodecs(transceiver, "send");
     }
-    const pion = await interop.pionPeer({ behavior: "red-audio-receive", opusRED: true, observationLimit: 2048 });
+    const pion = await interop.pionPeer({ behavior: "red-audio-receive", opusRED: true });
     await interop.negotiate(browser, pion);
     await expect.poll(async () => {
       const observation = await pion.rtp();
@@ -146,7 +146,7 @@ test("Browser plays two separate Pion RED audio streams", async ({ interop, skip
       preferAudioCodecs(browser.addTransceiver("audio", { direction: "recvonly" }), "receive");
     }
     const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true,
-      observationLimit: 2048, redSource: { tracks: 2 } });
+      redSource: { tracks: 2 } });
     await interop.negotiate(browser, pion);
     await expect.poll(async () => {
       expect((await pion.rtp()).errors).toEqual([]);

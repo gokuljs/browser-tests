@@ -5,7 +5,6 @@ package testserver
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -14,8 +13,8 @@ import (
 	"github.com/pion/rtp"
 )
 
-const maxRTPObservations = 256
-const maxRTPObservationLimit = 4096
+// Allow two 256-packet sources plus browser startup and padding packets.
+const maxRTPObservations = 2048
 
 type redSourceOptions struct {
 	Tracks int `json:"tracks"`
@@ -42,13 +41,12 @@ type rtpSnapshot struct {
 
 // RED peers retain a bounded prefix; ordinary peers have no recorder.
 type rtpRecorder struct {
-	mu               sync.Mutex
-	observation      rtpSnapshot
-	observationLimit int
-	sourceTracks     int
+	mu           sync.Mutex
+	observation  rtpSnapshot
+	sourceTracks int
 }
 
-func newRTPRecorder(observationLimit int, source *redSourceOptions) (*rtpRecorder, error) {
+func newRTPRecorder(source *redSourceOptions) (*rtpRecorder, error) {
 	tracks := 1
 	if source != nil && source.Tracks != 0 {
 		tracks = source.Tracks
@@ -56,14 +54,8 @@ func newRTPRecorder(observationLimit int, source *redSourceOptions) (*rtpRecorde
 	if tracks < 1 || tracks > 2 {
 		return nil, errors.New("redSource tracks must be between 1 and 2")
 	}
-	if observationLimit == 0 {
-		observationLimit = maxRTPObservations
-	}
-	if observationLimit < 1 || observationLimit > maxRTPObservationLimit {
-		return nil, fmt.Errorf("observationLimit must be between 1 and %d", maxRTPObservationLimit)
-	}
 
-	return &rtpRecorder{observationLimit: observationLimit, sourceTracks: tracks}, nil
+	return &rtpRecorder{sourceTracks: tracks}, nil
 }
 
 func observeRTP(header *rtp.Header, payload []byte) observedRTP {
@@ -77,15 +69,7 @@ func observeRTP(header *rtp.Header, payload []byte) observedRTP {
 func (r *rtpRecorder) record(target *[]observedRTP, header *rtp.Header, payload []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.recordLocked(target, header, payload)
-}
-
-func (r *rtpRecorder) recordLocked(target *[]observedRTP, header *rtp.Header, payload []byte) {
-	limit := r.observationLimit
-	if limit == 0 {
-		limit = maxRTPObservations
-	}
-	if len(*target) >= limit {
+	if len(*target) >= maxRTPObservations {
 		r.observation.Truncated = true
 
 		return
@@ -107,19 +91,12 @@ func (r *rtpRecorder) recordError(err error) {
 func (r *rtpRecorder) snapshot() rtpSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	clone := func(packets []observedRTP) []observedRTP {
-		result := append([]observedRTP{}, packets...)
-		for index := range result {
-			result[index].Payload = append([]byte{}, result[index].Payload...)
-		}
-
-		return result
-	}
+	// Payloads are copied on capture and never mutated.
 	return rtpSnapshot{
-		Inbound:     clone(r.observation.Inbound),
-		Outbound:    clone(r.observation.Outbound),
-		Application: clone(r.observation.Application),
-		Source:      clone(r.observation.Source),
+		Inbound:     append([]observedRTP{}, r.observation.Inbound...),
+		Outbound:    append([]observedRTP{}, r.observation.Outbound...),
+		Application: append([]observedRTP{}, r.observation.Application...),
+		Source:      append([]observedRTP{}, r.observation.Source...),
 		Errors:      append([]string{}, r.observation.Errors...),
 		Truncated:   r.observation.Truncated,
 	}
