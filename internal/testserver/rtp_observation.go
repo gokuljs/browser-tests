@@ -38,18 +38,14 @@ type rtpSnapshot struct {
 	Source      []observedRTP `json:"source"`
 	Errors      []string      `json:"errors"`
 	Truncated   bool          `json:"truncated"`
-	SourceDone  bool          `json:"sourceDone"`
 }
 
 // RED peers retain a bounded prefix; ordinary peers have no recorder.
 type rtpRecorder struct {
-	mu                 sync.Mutex
-	observation        rtpSnapshot
-	observationLimit   int
-	sourceTracks       int
-	sourcesCompleted   int
-	activeMediaReaders int
-	activeMediaWriters int
+	mu               sync.Mutex
+	observation      rtpSnapshot
+	observationLimit int
+	sourceTracks     int
 }
 
 func newRTPRecorder(observationLimit int, source *redSourceOptions) (*rtpRecorder, error) {
@@ -126,7 +122,6 @@ func (r *rtpRecorder) snapshot() rtpSnapshot {
 		Source:      clone(r.observation.Source),
 		Errors:      append([]string{}, r.observation.Errors...),
 		Truncated:   r.observation.Truncated,
-		SourceDone:  r.observation.SourceDone,
 	}
 }
 

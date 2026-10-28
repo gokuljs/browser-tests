@@ -48,12 +48,7 @@ func mediaEchoObserved(pc *webrtc.PeerConnection, observation *rtpRecorder) erro
 			return err
 		}
 		tracks[track.Kind()] = track
-		readerDone := func() {}
-		if observation != nil {
-			readerDone = observation.mediaReader()
-		}
 		go func() {
-			defer readerDone()
 			for {
 				if _, _, readErr := sender.ReadRTCP(); readErr != nil {
 					return
@@ -62,9 +57,6 @@ func mediaEchoObserved(pc *webrtc.PeerConnection, observation *rtpRecorder) erro
 		}()
 	}
 	pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		if observation != nil {
-			defer observation.mediaReader()()
-		}
 		local := tracks[remote.Kind()]
 		for {
 			packet, _, err := remote.ReadRTP()

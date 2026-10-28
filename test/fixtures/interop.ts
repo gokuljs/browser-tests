@@ -35,7 +35,6 @@ export type RTPObservations = {
   source: ObservedRTP[];
   errors: string[];
   truncated: boolean;
-  sourceDone: boolean;
 };
 
 export type AudioCodecOrder = "red-first" | "opus-first" | "opus-only";
@@ -70,7 +69,6 @@ export class PionPeer {
   createDataChannel(label: string, options: RTCDataChannelInit = {}): Promise<void> {
     return this.command("create-data-channel", { label, options });
   }
-  closeMedia(): Promise<RTPObservations> { return this.command("close-red-media"); }
   snapshot(): Promise<Snapshot> { return request(`/peers/${this.id}`); }
   stats(): Promise<Record<string, unknown>> { return request(`/peers/${this.id}/stats`); }
   rtp(): Promise<RTPObservations> { return request(`/peers/${this.id}/rtp`); }

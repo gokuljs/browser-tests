@@ -103,10 +103,7 @@ func redAudioSendTrack(pc *webrtc.PeerConnection, observation *rtpRecorder, pack
 		return nil, err
 	}
 	sender := transceiver.Sender()
-	readerDone := observation.mediaReader()
 	go func() {
-		defer readerDone()
-
 		for {
 			if _, _, readErr := sender.ReadRTCP(); readErr != nil {
 				return
@@ -115,11 +112,7 @@ func redAudioSendTrack(pc *webrtc.PeerConnection, observation *rtpRecorder, pack
 	}()
 	connected, closed := make(chan struct{}), make(chan struct{})
 	var startOnce, closeOnce sync.Once
-	observation.sourceStarted()
 	go func() {
-		completed := false
-		defer func() { observation.sourceFinished(completed) }()
-
 		select {
 		case <-connected:
 		case <-closed:
@@ -167,7 +160,6 @@ func redAudioSendTrack(pc *webrtc.PeerConnection, observation *rtpRecorder, pack
 				return
 			}
 		}
-		completed = true
 	}()
 
 	return func(state webrtc.PeerConnectionState) {
@@ -188,7 +180,6 @@ func redAudioReceive(pc *webrtc.PeerConnection, observation *rtpRecorder) error 
 		return err
 	}
 	pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		defer observation.mediaReader()()
 		for {
 			packet, _, err := remote.ReadRTP()
 			if err != nil {
