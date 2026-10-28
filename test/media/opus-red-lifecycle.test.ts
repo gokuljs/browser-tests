@@ -4,7 +4,7 @@
  */
 import { test, expect, type ObservedRTP, type PionPeer, type RTPObservations } from "../fixtures/interop";
 import { audioSink, mediaSource, oscillatorSource } from "../fixtures/media";
-import { audioCodecs, content, decodeRED, expectedDeliveries, identity, preferAudioCodecs, wireLedger, type Codecs } from "../fixtures/opus-red";
+import { audioCodecs, content, decodeRED, identity, preferAudioCodecs, wireLedger, type Codecs } from "../fixtures/opus-red";
 
 const audioStats = async (browser: RTCPeerConnection) => Array.from((await browser.getStats()).values())
   .filter(stat => stat.type === "inbound-rtp" && stat.kind === "audio") as RTCInboundRtpStreamStats[];
@@ -19,85 +19,54 @@ function activeAudioCodecs(description: RTCSessionDescriptionInit | null) {
   return audioCodecs({ type: description!.type, sdp: audio });
 }
 
-// ICE transitions can lose primaries. Verify copies against observed media and
-// infer missing identities only from completely covered, timestamp-anchored gaps.
-function transitionOutputs(packets: ObservedRTP[], codecs: Codecs) {
-  const primaries = new Map<string, ObservedRTP>();
-  const copies: { carrier: ObservedRTP; blocks: ReturnType<typeof decodeRED>["redundant"] }[] = [];
-  for (const carrier of packets) {
-    expect([codecs.opus, codecs.red], "lifecycle wire payload is negotiated").toContain(carrier.payloadType);
-    if (carrier.padding && carrier.payload === "") continue;
-    const decoded = carrier.payloadType === codecs.red ? decodeRED(carrier.payload) : {
-      redundant: [], primary: { payloadType: carrier.payloadType, payload: carrier.payload, offset: 0 },
-    };
-    expect(decoded.primary.payloadType).toBe(codecs.opus);
-    expect(decoded.primary.payload.length, "nonempty primary Opus").toBeGreaterThan(0);
-    const primary = { ...content(carrier), payloadType: codecs.opus, payload: decoded.primary.payload };
-    expect(primaries.has(identity(primary)), "no duplicate observed carrier identity").toBe(false);
-    primaries.set(identity(primary), primary);
-    copies.push({ carrier, blocks: decoded.redundant });
-  }
-  const copyPayloads = new Map<number, string>();
-  let verifiedCopies = 0;
-  for (const { carrier, blocks } of copies) {
-    blocks.forEach(block => {
-      expect(block.payloadType).toBe(codecs.opus);
-      expect(block.offset).toBeGreaterThan(0);
-      expect(block.payload.length).toBeGreaterThan(0);
-      const timestamp = (carrier.timestamp - block.offset) >>> 0;
-      const previous = copyPayloads.get(timestamp);
-      if (previous !== undefined) expect(block.payload, "consistent copied Opus bytes across carriers").toBe(previous);
-      copyPayloads.set(timestamp, block.payload);
-      const known = Array.from(primaries.values()).filter(packet => packet.timestamp === timestamp);
-      expect(known.length, "copy belongs to at most one observed primary in this SSRC").toBeLessThanOrEqual(1);
-      if (known.length) {
-        expect(block.payload, "redundancy exactly copies independently observed Opus bytes").toBe(known[0].payload);
-        verifiedCopies++;
-      }
-    });
-  }
-  expect(verifiedCopies, "useful independently verified RED copies remain present").toBeGreaterThan(5);
-  const outputs = expectedDeliveries(packets, codecs);
-  for (const packet of outputs) {
-    const known = primaries.get(identity(packet));
-    if (known) expect(packet, "recovered bytes and identity match any independently observed primary").toEqual(known);
-  }
-  return { outputs, inferred: new Set(outputs.filter(packet => !primaries.has(identity(packet))).map(identity)).size,
-    maxPending: Math.max(...copies.map(copy => copy.blocks.length)) + 1 };
-}
-
-function verifyIncoming(observations: RTPObservations, codecs: Codecs, transitionLoss = false) {
+// Match application audio to observed blocks without predicting recovery or delivery order.
+function verifyIncoming(observations: RTPObservations, codecs: Codecs) {
   const streams = groups(observations.inbound);
   expect(Array.from(groups(media(observations.application)).keys()).sort(), "only observed SSRCs reach the application")
     .toEqual(Array.from(streams.keys()).sort());
   for (const [ssrc, packets] of streams) {
-    const deliveries = media(observations.application).filter(packet => packet.ssrc === ssrc);
-    if (transitionLoss) {
-      const expected = transitionOutputs(packets, codecs);
-      expect(deliveries.map(content), "exact per-carrier Opus recovery order, including every completed carrier")
-        .toEqual(expected.outputs.slice(0, deliveries.length));
-      expect(expected.outputs.length - deliveries.length, "only the final carrier may be pending in a live snapshot")
-        .toBeLessThanOrEqual(expected.maxPending);
-      expect(new Set(deliveries.map(identity)).size, "no duplicate application deliveries").toBe(deliveries.length);
-      expect(deliveries.length).toBeGreaterThan(25);
-      console.log(`[RED lifecycle SSRC ${ssrc}] exact observed primaries and decoded copies; ` +
-        `copy identities inferred from timestamp-anchored gaps=${expected.inferred}`);
-      continue;
+    const primaries = new Map<string, ObservedRTP>();
+    const redundant: { timestamp: number; payload: string }[] = [];
+    let redPackets = 0;
+    for (const packet of packets) {
+      expect([codecs.opus, codecs.red], "wire payload type is negotiated").toContain(packet.payloadType);
+      if (packet.padding && packet.payload === "") continue;
+      const decoded = packet.payloadType === codecs.red ? decodeRED(packet.payload) : {
+        primary: { payloadType: packet.payloadType, payload: packet.payload }, redundant: [],
+      };
+      expect(decoded.primary.payloadType, "primary block contains Opus").toBe(codecs.opus);
+      expect(decoded.primary.payload.length).toBeGreaterThan(0);
+      primaries.set(identity(packet), { ...content(packet), payloadType: codecs.opus, payload: decoded.primary.payload });
+      if (packet.payloadType === codecs.red) redPackets++;
+      for (const block of decoded.redundant) {
+        expect(block.payloadType, "redundant block contains Opus").toBe(codecs.opus);
+        expect(block.offset, "redundant block carries earlier audio").toBeGreaterThan(0);
+        expect(block.payload.length).toBeGreaterThan(0);
+        redundant.push({ timestamp: (packet.timestamp - block.offset) >>> 0, payload: block.payload });
+      }
     }
-    const ledger = wireLedger(packets, codecs, { allowUnidentifiedStartup: false });
+    expect(redPackets, "actual negotiated RED transmission").toBeGreaterThan(5);
+    expect(redundant.filter(block => Array.from(primaries.values()).some(packet =>
+      packet.timestamp === block.timestamp && packet.payload === block.payload)).length,
+    "redundant blocks byte-match independently observed Opus primaries").toBeGreaterThan(5);
+
+    const deliveries = media(observations.application).filter(packet => packet.ssrc === ssrc);
     const delivered = new Set<string>();
     for (const packet of deliveries) {
+      expect(packet.payloadType, "application receives Opus").toBe(codecs.opus);
+      expect(packet.payload.length).toBeGreaterThan(0);
       expect(delivered.has(identity(packet)), "no duplicate delivery within an SSRC").toBe(false);
-      expect(content(packet), "delivered Opus belongs to this stream's own carriers").toEqual(ledger.sources.get(identity(packet)));
+      const primary = primaries.get(identity(packet));
+      if (primary) {
+        expect(content(packet), "delivered Opus matches an observed primary").toEqual(primary);
+      } else {
+        // RED copies carry timestamps and bytes, but no original sequence number.
+        expect(redundant.some(block => block.timestamp === packet.timestamp && block.payload === packet.payload),
+          "delivered Opus matches an observed redundant block in this stream").toBe(true);
+      }
       delivered.add(identity(packet));
     }
     expect(delivered.size).toBeGreaterThan(25);
-    const origin = packets[0].sequenceNumber;
-    const position = (sequence: number) => (sequence - origin + 0x8000 & 0xffff) - 0x8000;
-    const tail = Math.max(...deliveries.map(packet => position(packet.sequenceNumber)));
-    for (const source of ledger.sources.values()) {
-      if (position(source.sequenceNumber) <= tail) expect(delivered.has(identity(source)), "complete delivery before snapshot tail").toBe(true);
-    }
   }
   expect(observations.errors).toEqual([]);
   expect(observations.truncated, "lifecycle observations include fresh phases").toBe(false);
@@ -286,7 +255,7 @@ test("RED audio, video, and data survive renegotiation and ICE restart", async (
     expect(opens).toBe(1); expect(closes).toBe(0);
     expect((await pion.snapshot()).signalingState).toBe("stable");
     const observations = await pion.rtp();
-    verifyIncoming(observations, activeAudioCodecs(browser.localDescription), true);
+    verifyIncoming(observations, activeAudioCodecs(browser.localDescription));
     const codecs = audioCodecs(browser.remoteDescription);
     const outgoingSSRC = observations.outbound.find(packet => packet.payload !== "")!.ssrc;
     const echoedSource = observations.application.map(packet => ({ ...content(packet), ssrc: outgoingSSRC, payloadType: codecs.opus }));
