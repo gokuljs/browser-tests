@@ -247,14 +247,16 @@ test("RED audio, video, and data survive renegotiation and ICE restart", async (
     const frames = async () => Array.from((await browser.getStats()).values()).find(stat => stat.type === "inbound-rtp" && stat.kind === "video")?.framesDecoded ?? 0;
     let checkpoint = { inbound: 0, outbound: 0, application: 0, samples: 0, frames: 0 };
     const progress = async (phase: string) => {
+      const incoming = audioCodecs(browser.localDescription);
+      const outgoing = audioCodecs(browser.remoteDescription);
       await expect.poll(async () => {
         const observations = await pion!.rtp();
         expect(observations.errors).toEqual([]);
         const freshInbound = observations.inbound.slice(checkpoint.inbound);
         const freshOutbound = observations.outbound.slice(checkpoint.outbound);
         return observations.application.length > checkpoint.application + 10 &&
-          freshInbound.filter(packet => packet.payloadType === 63).length > 5 &&
-          freshOutbound.filter(packet => packet.payloadType === 63).length > 5;
+          freshInbound.filter(packet => packet.payloadType === incoming.red).length > 5 &&
+          freshOutbound.filter(packet => packet.payloadType === outgoing.red).length > 5;
       }, { timeout: 15_000 }).toBe(true);
       await expect.poll(async () => samples((await audioStats(browser))[0]), { timeout: 15_000 }).toBeGreaterThan(checkpoint.samples + 4800);
       await expect.poll(playback.rms, { timeout: 15_000 }).toBeGreaterThan(0.01);
