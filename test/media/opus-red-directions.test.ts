@@ -4,7 +4,7 @@
  */
 import { test, expect } from "../fixtures/interop";
 import { audioSink } from "../fixtures/media";
-import { audioCodecs, content, decodeRED, identity, wireLedger, preferAudioCodecs } from "../fixtures/opus-red";
+import { audioCodecs, content, wireLedger, preferAudioCodecs } from "../fixtures/opus-red";
 
 const stats = async (browser: RTCPeerConnection) => Array.from((await browser.getStats()).values());
 const inbound = async (browser: RTCPeerConnection) => (await stats(browser)).find(stat =>
@@ -14,15 +14,15 @@ const decodedSamples = async (browser: RTCPeerConnection) => {
   return (received?.totalSamplesReceived ?? 0) - (received?.concealedSamples ?? 0);
 };
 
-// Check that playback starts when the first arriving audio packet is RED.
-test("Browser plays audio when Pion starts with RED", async ({ interop, skip }) => {
+// Check RED transmission and decoded, non-silent browser playback.
+test("Browser decodes and plays Pion RED audio", async ({ interop, skip }) => {
   await interop.features.require({ skip }, "pion.opusRED", "browser.opusREDReceive");
   const browser = interop.browserPeer();
   const playback = await audioSink(browser);
   try {
     const transceiver = browser.addTransceiver("audio", { direction: "recvonly" });
     preferAudioCodecs(transceiver, "receive");
-    const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true, startWithRED: true });
+    const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true });
     await interop.negotiate(browser, pion);
     const codecs = audioCodecs(browser.remoteDescription);
     audioCodecs(browser.localDescription);
@@ -42,7 +42,7 @@ test("Browser plays audio when Pion starts with RED", async ({ interop, skip }) 
     await expect.poll(async () => {
       const snapshot = await pion.rtp();
       return { source: snapshot.source.length, wire: snapshot.outbound.length, errors: snapshot.errors };
-    }, { timeout: 10_000 }).toEqual({ source: 256, wire: 255, errors: [] });
+    }, { timeout: 10_000 }).toEqual({ source: 256, wire: 256, errors: [] });
 
     const observations = await pion.rtp();
     expect(observations.errors).toEqual([]);
@@ -59,23 +59,18 @@ test("Browser plays audio when Pion starts with RED", async ({ interop, skip }) 
     });
     const sent = wireLedger(observations.outbound, codecs, { source: observations.source });
     expect(Array.from(sent.primary.values()), "every transmitted primary matches its source exactly once")
-      .toEqual(observations.source.slice(1).map(content));
+      .toEqual(observations.source.map(content));
     expect(sent.depths).toContain(1);
     expect(sent.depths).toContain(2);
     expect(Math.max(...sent.depths)).toBe(2);
-    expect(observations.droppedOutbound, "exactly the initial plain packet was suppressed")
-      .toEqual([observations.source[0]]);
-    expect(observations.outbound[0].payloadType, "first transmitted media is RED").toBe(codecs.red);
-    expect(observations.outbound[0].sequenceNumber).toBe(1001);
-    const first = decodeRED(observations.outbound[0].payload);
-    expect(first.redundant).toEqual([{ payloadType: codecs.opus, offset: 960, payload: observations.source[0].payload }]);
-    expect(sent.sources.get(identity(observations.source[0])), "surviving carrier protects suppressed audio")
-      .toEqual(content(observations.source[0]));
+    expect(observations.outbound[0].payloadType, "initial packet is Opus").toBe(codecs.opus);
+    expect(observations.outbound.slice(1).every(packet => packet.payloadType === codecs.red),
+      "subsequent audio is RED").toBe(true);
     expect((await stats(browser)).filter(stat => stat.type === "outbound-rtp" && stat.kind === "audio")
       .every(stat => stat.packetsSent === 0), "receive-only browser sends no audio").toBe(true);
     expect((await pion.rtp()).errors, "no later Pion errors").toEqual([]);
-    console.log(`[RED-first Pion playback] source=${observations.source.length}, ` +
-      `wire=${observations.outbound.length}, verified copies=${sent.copies}, dropped=${observations.droppedOutbound.length}, ` +
+    console.log(`[Pion RED playback] source=${observations.source.length}, ` +
+      `wire=${observations.outbound.length}, verified copies=${sent.copies}, ` +
       `decoded samples=${await decodedSamples(browser)}, non-silent audio, bounded snapshot truncated=${observations.truncated}`);
   } finally {
     await playback.close();

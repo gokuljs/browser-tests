@@ -67,7 +67,6 @@ async function verifyPlayback(browser: RTCPeerConnection, pion: PionPeer, playba
   expect(observations.truncated, "complete playback evidence").toBe(false);
   expect(observations.inbound, "Pion only sends audio").toEqual([]);
   expect(observations.application).toEqual([]);
-  expect(observations.droppedOutbound).toEqual([]);
   return observations;
 }
 
@@ -185,7 +184,6 @@ async function receiveOpusAudio(interop: Interop, skip: Skip, offerer: Offerer) 
     expect(observations.errors).toEqual([]);
     expect(observations.outbound).toEqual([]);
     expect(observations.source).toEqual([]);
-    expect(observations.droppedOutbound).toEqual([]);
     expect(transceiver.currentDirection).toBe("sendonly");
     expect(browser.connectionState).toBe("connected");
     console.log(`[Opus fallback browser sends, ${offerer} offers] payload type=${opus}, ` +

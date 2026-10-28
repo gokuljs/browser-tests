@@ -33,7 +33,6 @@ export type RTPObservations = {
   outbound: ObservedRTP[];
   application: ObservedRTP[];
   source: ObservedRTP[];
-  droppedOutbound: ObservedRTP[];
   errors: string[];
   truncated: boolean;
   sourceDone: boolean;
@@ -117,7 +116,7 @@ export class Interop {
     return pc;
   }
 
-  async pionPeer(options: { behavior?: string; configuration?: RTCConfiguration; certificateCount?: number; opusRED?: boolean; startWithRED?: boolean;
+  async pionPeer(options: { behavior?: string; configuration?: RTCConfiguration; certificateCount?: number; opusRED?: boolean;
     opusREDPayloadTypes?: { opus: number; red: number }; audioCodecOrder?: AudioCodecOrder;
     redSource?: { tracks?: number }; observationLimit?: number } = {}): Promise<PionPeer> {
     const { id, certificateFingerprints } = await request<{ id: string; certificateFingerprints?: string[] }>("/peers", "POST", options);

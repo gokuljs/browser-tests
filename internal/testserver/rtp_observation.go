@@ -32,30 +32,27 @@ type observedRTP struct {
 }
 
 type rtpSnapshot struct {
-	Inbound         []observedRTP `json:"inbound"`
-	Outbound        []observedRTP `json:"outbound"`
-	Application     []observedRTP `json:"application"`
-	Source          []observedRTP `json:"source"`
-	DroppedOutbound []observedRTP `json:"droppedOutbound"`
-	Errors          []string      `json:"errors"`
-	Truncated       bool          `json:"truncated"`
-	SourceDone      bool          `json:"sourceDone"`
+	Inbound     []observedRTP `json:"inbound"`
+	Outbound    []observedRTP `json:"outbound"`
+	Application []observedRTP `json:"application"`
+	Source      []observedRTP `json:"source"`
+	Errors      []string      `json:"errors"`
+	Truncated   bool          `json:"truncated"`
+	SourceDone  bool          `json:"sourceDone"`
 }
 
 // RED peers retain a bounded prefix; ordinary peers have no recorder.
 type rtpRecorder struct {
 	mu                 sync.Mutex
 	observation        rtpSnapshot
-	startWithRED       bool
 	observationLimit   int
 	sourceTracks       int
-	startupSuppressed  bool
 	sourcesCompleted   int
 	activeMediaReaders int
 	activeMediaWriters int
 }
 
-func newRTPRecorder(startWithRED bool, observationLimit int, source *redSourceOptions) (*rtpRecorder, error) {
+func newRTPRecorder(observationLimit int, source *redSourceOptions) (*rtpRecorder, error) {
 	tracks := 1
 	if source != nil && source.Tracks != 0 {
 		tracks = source.Tracks
@@ -70,7 +67,7 @@ func newRTPRecorder(startWithRED bool, observationLimit int, source *redSourceOp
 		return nil, fmt.Errorf("observationLimit must be between 1 and %d", maxRTPObservationLimit)
 	}
 
-	return &rtpRecorder{startWithRED: startWithRED, observationLimit: observationLimit, sourceTracks: tracks}, nil
+	return &rtpRecorder{observationLimit: observationLimit, sourceTracks: tracks}, nil
 }
 
 func observeRTP(header *rtp.Header, payload []byte) observedRTP {
@@ -100,19 +97,6 @@ func (r *rtpRecorder) recordLocked(target *[]observedRTP, header *rtp.Header, pa
 	*target = append(*target, observeRTP(header, payload))
 }
 
-// Suppress the first plain Opus carrier after encoding so the next carrier is RED.
-func (r *rtpRecorder) suppressStartupOpus(header *rtp.Header, payload []byte, opusPayloadType uint8) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.startWithRED || r.startupSuppressed || header.Padding || len(payload) == 0 || header.PayloadType != opusPayloadType {
-		return false
-	}
-	r.startupSuppressed = true
-	r.recordLocked(&r.observation.DroppedOutbound, header, payload)
-
-	return true
-}
-
 func (r *rtpRecorder) recordError(err error) {
 	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
 		return
@@ -136,14 +120,13 @@ func (r *rtpRecorder) snapshot() rtpSnapshot {
 		return result
 	}
 	return rtpSnapshot{
-		Inbound:         clone(r.observation.Inbound),
-		Outbound:        clone(r.observation.Outbound),
-		Application:     clone(r.observation.Application),
-		Source:          clone(r.observation.Source),
-		DroppedOutbound: clone(r.observation.DroppedOutbound),
-		Errors:          append([]string{}, r.observation.Errors...),
-		Truncated:       r.observation.Truncated,
-		SourceDone:      r.observation.SourceDone,
+		Inbound:     clone(r.observation.Inbound),
+		Outbound:    clone(r.observation.Outbound),
+		Application: clone(r.observation.Application),
+		Source:      clone(r.observation.Source),
+		Errors:      append([]string{}, r.observation.Errors...),
+		Truncated:   r.observation.Truncated,
+		SourceDone:  r.observation.SourceDone,
 	}
 }
 
@@ -162,9 +145,6 @@ func (o *rtpObserver) BindLocalStream(info *interceptor.StreamInfo, writer inter
 	}
 
 	return interceptor.RTPWriterFunc(func(header *rtp.Header, payload []byte, attributes interceptor.Attributes) (int, error) {
-		if o.recorder.suppressStartupOpus(header, payload, uint8(info.PayloadType)) {
-			return header.MarshalSize() + len(payload), nil
-		}
 		o.recorder.record(&o.recorder.observation.Outbound, header, payload)
 		n, err := writer.Write(header, payload, attributes)
 		o.recorder.recordError(err)

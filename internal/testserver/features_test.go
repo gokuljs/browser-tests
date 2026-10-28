@@ -80,7 +80,6 @@ func TestFeatureDiscoveryAndOptionalOffer(t *testing.T) {
 			response = call("GET", profilePath+"/rtp", "")
 			require.Equal(t, http.StatusOK, response.Code)
 			require.Contains(t, response.Body.String(), `"source":[]`)
-			require.Contains(t, response.Body.String(), `"droppedOutbound":[]`)
 			response = call("POST", profilePath+"/create-offer", `{}`)
 			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 			require.Contains(t, response.Body.String(), "a="+profile.direction)

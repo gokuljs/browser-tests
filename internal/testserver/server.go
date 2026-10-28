@@ -95,7 +95,6 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 		Behavior         string               `json:"behavior"`
 		Configuration    webrtc.Configuration `json:"configuration"`
 		OpusRED          bool                 `json:"opusRED"`
-		StartWithRED     bool                 `json:"startWithRED"`
 		REDPayloadTypes  *redPayloadTypes     `json:"opusREDPayloadTypes"`
 		AudioCodecOrder  string               `json:"audioCodecOrder"`
 		REDSource        *redSourceOptions    `json:"redSource"`
@@ -125,11 +124,6 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	}
 	if (body.Behavior == "red-audio-send" || body.Behavior == "red-audio-receive" || body.Behavior == "red-bundled-echo") && !body.OpusRED {
 		http.Error(res, "RED audio behaviors require opusRED", http.StatusBadRequest)
-
-		return
-	}
-	if body.StartWithRED && (!body.OpusRED || body.Behavior != "red-audio-send") {
-		http.Error(res, "startWithRED requires red-audio-send with opusRED", http.StatusBadRequest)
 
 		return
 	}
@@ -182,7 +176,7 @@ func (s *Server) create(res http.ResponseWriter, req *http.Request) {
 	var err error
 	var observation *rtpRecorder
 	if body.OpusRED {
-		observation, err = newRTPRecorder(body.StartWithRED, body.ObservationLimit, body.REDSource)
+		observation, err = newRTPRecorder(body.ObservationLimit, body.REDSource)
 		if err != nil {
 			http.Error(res, err.Error(), http.StatusBadRequest)
 
