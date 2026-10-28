@@ -17,7 +17,8 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media/oggreader"
 )
 
-const redAudioPacketCount = 256
+// Two seconds of 20 ms Opus frames is enough for transmission and playback checks.
+const redAudioPacketCount = 100
 
 // Generated once with ffmpeg 8.1.1; no encoder is needed when tests run:
 //
@@ -31,36 +32,22 @@ const redAudioPacketCount = 256
 //go:embed testdata/tone.opus
 var redAudioTone []byte //nolint:gochecknoglobals // Embedded, immutable media fixture.
 
-var ( //nolint:gochecknoglobals
-	errREDToneShape    = errors.New("RED tone must contain stereo 48 kHz Opus, one 20 ms frame per page")
-	errREDToneEncoding = errors.New("RED tone sender has no negotiated encoding")
-)
+var errREDToneEncoding = errors.New("RED tone sender has no negotiated encoding") //nolint:gochecknoglobals
 
 func readREDTone() ([][]byte, error) {
-	reader, header, err := oggreader.NewWith(bytes.NewReader(redAudioTone))
+	reader, _, err := oggreader.NewWith(bytes.NewReader(redAudioTone))
 	if err != nil {
 		return nil, err
 	}
-	if header.Channels != 2 || header.SampleRate != 48000 {
-		return nil, errREDToneShape
-	}
-	tags, _, err := reader.ParseNextPage()
-	if err != nil {
+	// The fixed fixture has an OpusTags page before its 20 ms audio pages.
+	if _, _, err = reader.ParseNextPage(); err != nil {
 		return nil, err
-	}
-	if !bytes.HasPrefix(tags, []byte("OpusTags")) {
-		return nil, errREDToneShape
 	}
 	packets := make([][]byte, 0, redAudioPacketCount)
-	for index := range redAudioPacketCount {
-		payload, page, readErr := reader.ParseNextPage()
+	for range redAudioPacketCount {
+		payload, _, readErr := reader.ParseNextPage()
 		if readErr != nil {
 			return nil, readErr
-		}
-		// Fixed 64 kbit/s, 20 ms CELT packets; code 0 contains exactly one frame.
-		if len(payload) != 160 || payload[0]>>3 != 31 || payload[0]&3 != 0 ||
-			page.GranulePosition != uint64(index+1)*960 {
-			return nil, errREDToneShape
 		}
 		packets = append(packets, payload)
 	}
@@ -148,7 +135,7 @@ func redAudioSendTrack(pc *webrtc.PeerConnection, observation *rtpRecorder, pack
 			packet := &rtp.Packet{
 				Header: rtp.Header{
 					Version: 2, PayloadType: opusPayloadType, SSRC: ssrc,
-					SequenceNumber: uint16(1000 + index),      //nolint:gosec // Fixed 256-packet source.
+					SequenceNumber: uint16(1000 + index),      //nolint:gosec // Fixed 100-packet source.
 					Timestamp:      48000 + uint32(index)*960, //nolint:gosec // Fixed 20 ms progression.
 				},
 				Payload: packets[(index+trackIndex*redAudioPacketCount/2)%len(packets)],
