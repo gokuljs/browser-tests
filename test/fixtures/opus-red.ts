@@ -56,9 +56,11 @@ export function audioCodecs(description: RTCSessionDescriptionInit | null): Code
   const audio = description?.sdp?.split(/(?=^m=)/m).find(section => section.startsWith("m=audio "));
   expect(audio, "negotiated audio section").toBeDefined();
   const payloads = audio!.split(/\r?\n/)[0].split(" ").slice(3).map(Number);
-  const type = (name: string) => {
-    const match = audio!.match(new RegExp(`^a=rtpmap:(\\d+) ${name}/48000/2\\r?$`, "mi"));
-    expect(match, `negotiated ${name}/48000/2`).not.toBeNull();
+  const type = (name: "opus" | "red") => {
+    // Firefox can omit RED's channel count when serializing a description.
+    const channels = name === "red" ? "(?:/2)?" : "/2";
+    const match = audio!.match(new RegExp(`^a=rtpmap:(\\d+) ${name}/48000${channels}\\r?$`, "mi"));
+    expect(match, `negotiated ${name} at 48000 Hz`).not.toBeNull();
     const pt = Number(match![1]);
     expect(payloads).toContain(pt);
     return pt;

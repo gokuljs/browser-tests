@@ -83,7 +83,8 @@ export function interopFeatures(loadPionFeatures: () => Promise<Record<string, F
 function opusRED(capabilities: RTCRtpCapabilities | null, direction: string): FeatureSupport {
   const codecs = capabilities?.codecs ?? [];
   const supported = ["audio/opus", "audio/red"].every(mime => codecs.some(codec =>
-    codec.mimeType.toLowerCase() === mime && codec.clockRate === 48000 && codec.channels === 2));
+    codec.mimeType.toLowerCase() === mime && codec.clockRate === 48000 &&
+    (codec.channels === 2 || mime === "audio/red" && codec.channels === undefined)));
   return supported ? { supported: true } : {
     supported: false, reason: `Browser does not advertise Opus and audio/RED for ${direction}`,
   };
