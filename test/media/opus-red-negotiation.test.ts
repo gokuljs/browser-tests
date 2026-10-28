@@ -7,7 +7,13 @@ import { audioSink, oscillatorSource } from "../fixtures/media";
 import { audioCodecs, identity, opusLedger, opusOnlyCodec, preferAudioCodecs, wireLedger } from "../fixtures/opus-red";
 
 type Offerer = "browser" | "pion";
-type Skip = (condition: boolean, note?: string) => void;
+type FallbackCase = {
+  name: string;
+  offerer: Offerer;
+  sender: Offerer;
+  browserCodecs: AudioCodecOrder;
+  pionCodecs?: AudioCodecOrder;
+};
 
 const inbound = async (browser: RTCPeerConnection) => Array.from((await browser.getStats()).values()).find(stat =>
   stat.type === "inbound-rtp" && stat.kind === "audio") as RTCInboundRtpStreamStats | undefined;
@@ -105,19 +111,17 @@ test("Browser plays RED using payload types 109 and 112", async ({ interop, skip
   }
 });
 
-async function playOpusAudio(interop: Interop, skip: Skip, offerer: Offerer,
-  offerCodecs: AudioCodecOrder = "opus-only") {
-  await interop.features.require({ skip }, "pion.opusRED");
-  if (offerCodecs === "red-first") await interop.features.require({ skip }, "browser.opusREDReceive");
+async function playOpusAudio(interop: Interop, scenario: FallbackCase) {
+  const { offerer, browserCodecs, pionCodecs } = scenario;
   const browser = interop.browserPeer();
   const playback = await audioSink(browser);
   try {
     const pion = await interop.pionPeer({ behavior: "red-audio-send", opusRED: true,
-      audioCodecOrder: offerCodecs === "red-first" ? "opus-only" : undefined });
-    await negotiate(interop, browser, pion, offerer, "receive", offerCodecs);
+      audioCodecOrder: pionCodecs });
+    await negotiate(interop, browser, pion, offerer, "receive", browserCodecs);
     const answer = offerer === "browser" ? browser.remoteDescription : browser.localDescription;
     const opus = opusOnlyCodec(answer);
-    if (offerCodecs === "red-first") {
+    if (browserCodecs === "red-first") {
       expect(audioCodecs(browser.localDescription).opus, "RED offer and Opus-only answer agree on Opus")
         .toBe(opus);
     }
@@ -131,16 +135,14 @@ async function playOpusAudio(interop: Interop, skip: Skip, offerer: Offerer,
   }
 }
 
-async function receiveOpusAudio(interop: Interop, skip: Skip, offerer: Offerer) {
-  await interop.features.require({ skip }, "pion.opusRED");
+async function receiveOpusAudio(interop: Interop, scenario: FallbackCase) {
+  const { offerer, browserCodecs, pionCodecs } = scenario;
   const media = await oscillatorSource();
   try {
     const browser = interop.browserPeer();
-    // Chrome can send unnegotiated RED after answering a RED-first offer with Opus only.
-    // Keep RED in Pion's offer, but prefer Opus so the fallback uses negotiated RTP.
     const pion = await interop.pionPeer({ behavior: "red-audio-receive", opusRED: true,
-      audioCodecOrder: offerer === "pion" ? "opus-first" : undefined });
-    const transceiver = await negotiate(interop, browser, pion, offerer, "send", "opus-only", media.stream);
+      audioCodecOrder: pionCodecs });
+    const transceiver = await negotiate(interop, browser, pion, offerer, "send", browserCodecs, media.stream);
     const answer = offerer === "browser" ? browser.remoteDescription : browser.localDescription;
     const opus = opusOnlyCodec(answer);
     if (offerer === "pion") {
@@ -187,27 +189,31 @@ async function receiveOpusAudio(interop: Interop, skip: Skip, offerer: Offerer) 
   }
 }
 
-// Check that Pion answers with Opus and sends playable audio.
-test("Browser offers Opus only and plays Pion audio", async ({ interop, skip }) => {
-  await playOpusAudio(interop, skip, "browser");
-});
+const fallbackCases: FallbackCase[] = [
+  { name: "Browser offers Opus only and plays Pion audio", offerer: "browser", sender: "pion",
+    browserCodecs: "opus-only" },
+  { name: "Pion answers a RED offer with Opus-only audio", offerer: "browser", sender: "pion",
+    browserCodecs: "red-first", pionCodecs: "opus-only" },
+  { name: "Browser offers Opus only and Pion receives audio", offerer: "browser", sender: "browser",
+    browserCodecs: "opus-only" },
+  { name: "Pion offers RED and browser plays Opus-only audio", offerer: "pion", sender: "pion",
+    browserCodecs: "opus-only" },
+  // Chrome can transmit unnegotiated RED after an Opus-only answer to a RED-first offer.
+  // Exercise the passing Opus-first offer here; RED-first needs separate browser-version coverage.
+  { name: "Pion offers RED with Opus first and receives Opus-only browser audio", offerer: "pion", sender: "browser",
+    browserCodecs: "opus-only", pionCodecs: "opus-first" },
+];
 
-// Keep RED configured on Pion while its answer disables RED for the sender.
-test("Pion answers a RED offer with Opus-only audio", async ({ interop, skip }) => {
-  await playOpusAudio(interop, skip, "browser", "red-first");
-});
-
-// Check that Pion accepts and delivers the browser's plain Opus audio.
-test("Browser offers Opus only and Pion receives audio", async ({ interop, skip }) => {
-  await receiveOpusAudio(interop, skip, "browser");
-});
-
-// Check that Pion follows an answer selecting only Opus.
-test("Pion offers RED and browser plays Opus-only audio", async ({ interop, skip }) => {
-  await playOpusAudio(interop, skip, "pion");
-});
-
-// Check that browser transmission and Pion delivery use negotiated Opus.
-test("Pion offers RED and receives Opus-only browser audio", async ({ interop, skip }) => {
-  await receiveOpusAudio(interop, skip, "pion");
-});
+for (const scenario of fallbackCases) {
+  test(scenario.name, async ({ interop, skip }) => {
+    await interop.features.require({ skip }, "pion.opusRED");
+    if (scenario.browserCodecs === "red-first") {
+      await interop.features.require({ skip }, "browser.opusREDReceive");
+    }
+    if (scenario.sender === "pion") {
+      await playOpusAudio(interop, scenario);
+    } else {
+      await receiveOpusAudio(interop, scenario);
+    }
+  });
+}
